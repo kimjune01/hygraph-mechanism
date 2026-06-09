@@ -83,12 +83,37 @@ For a targeted set of instances (branchy graph ⋀ revealed-hard ⋀ merged-with
 1. Check out the repo at the **pre-merge parent commit** on an EC2 box.
 2. Recover the **symptom-only input** (the original issue text) and the **oracle**
    (the test the merged PR shipped: red at parent, green on the gold fix).
-3. Run craft two ways, graded by the shipped test:
+3. Run craft two ways, graded by the merge-certified test:
    - **without:** `craft( symptom + failing test )` — null handoff.
    - **with:** `craft( symptom + failing test + hypothesis graph )`.
 
 The graph is the **artifact under test**. Whatever generates it (the `investigate`
 / `recon` inquiry process) is the **mechanism** the paper is about.
+
+### What counts as gold: the merge, not the test
+
+There is no pre-existing test oracle in this regime. The test the PR shipped was
+written by the harness, but **that is irrelevant once it merged.** A merged test
+is gold for exactly the same reason every SWE-bench gold test is gold: it was
+accepted into `main` and now guards the repo. The field never audits whether a
+human or a tool drafted a gold test, or how hard the maintainer stared at it; the
+merge *is* the certification. A harness-authored test that merged has identical
+standing. **The fix and the test were both attested by the same merge**, so the
+gold is the merged fix+test bundle, and applying extra suspicion because the
+harness drafted it would be special pleading the field does not apply to anyone
+else.
+
+Consequences:
+
+- **Only merged PRs are eligible.** Closed-unmerged PRs carry no attestation and
+  cannot be graded. They drop out of the experiment.
+- **The grade is independent of the agent**, because the merge is a human
+  decision external to the harness. That independence is what makes the existence
+  case survive a skeptic.
+- The one caveat is **inherited, not new**: a narrow gold test can in principle
+  reject a different correct fix (test-overfitting). This applies identically to
+  every human-authored SWE-bench gold test and is mitigated the same way (review).
+  It is not a special liability of harness-drafted tests.
 
 ### Win condition (existence case)
 
