@@ -96,16 +96,42 @@ oversized hunks). An arm must **not** edit the gold test. Grade each arm against
 the **fixed** merged test on a **fresh** checkout. The harness's internal gate is
 a stop signal only; the merged test is the verdict.
 
+**Craft gets a run-handle, not the test body.** Expose the failing test to craft as
+a pass/fail signal it can run, not as source in the prompt. If the assertion body
+is in context, every arm can pattern-match it, and +M-vs-craft-only partly measures
+"graph helps hit the assertion" — the input oracle-leak from the Pro field card. In
+the no-spec regime the test is tempting as the only behavior signal; that is the
+trap. Run-handle keeps the differential about diagnosis.
+
+**Compute-asymmetry scope.** +M includes an extra diagnosis pass craft-only never
+gets, so part of any gap is upstream compute, not the graph's content. The claim
+*the graph artifact helps* survives this; the stronger *diagnosis beyond compute
+helps* needs a compute-matched craft-only arm (equal planning budget, no artifact).
+State the scope; the matched arm is optional.
+
 ## Stage 3 — controls and adversarial verification
 
-- **Flat-graph negative control:** run B on flat-graph instances. Predict **no
-  gap**. If flat graphs also produce a gap, diagnosis is not the driver and the
-  result is suspect. The gap must **track topology**.
-- **Confirm the instrument moved:** verify A vs B actually differ downstream (graph
+- **Flat-graph negative control:** run +M on flat-graph instances. Predict **no
+  gap** (no diagnosis to be load-bearing).
+- **Shuffled-graph negative control** (codex, for completeness): give craft a
+  plausible but **wrong** graph from a different issue. Predict **no gap**. If a
+  mismatched graph still helps, the benefit is generic scaffolding / extra context,
+  not diagnosis. Pairs with flat-graph: flat = no diagnosis, shuffled = wrong
+  diagnosis; the gap must **track diagnostic fit**, not mere presence of a document.
+  A negative control needs breadth, not bug-class, so the frame is *all gradeable
+  instances* (closing-issue ∧ shipped-test) regardless of bug/feature.
+  **The frame caps at n=29** in the current merged set — run the whole 29 rather
+  than sampling; reaching n=40 requires expanding the source PR set (the
+  shipped-test oracle requirement is non-negotiable, so don't relax it to pad N).
+- **Confirm the instrument moved:** verify arms actually differ downstream (graph
   injected and read), not a silent no-op (the A2 sentinel lesson).
-- **Adversarial refutation:** an independent cross-family model tries to refute
-  each surviving Tier-1 case (default refuted): infra artifact? different-but-
-  correct fix the narrow test rejects? Only survivors are claimed.
+- **Degenerate-patch check (not a heavyweight audit).** The merge already
+  human-verifies the *gold*; it does **not** verify the *arm's* patch, which no
+  maintainer saw. So the only residual is the Pro special-case move: did +M win by
+  writing the smallest thing that satisfies a narrow assertion rather than a real
+  fix? Default to trusting the merged test as the verdict; eyeball +M's diff for
+  test-shaped hacks, and reserve a heavier look only when the merged test is narrow
+  (one assertion, one case). Not a semantic re-audit of every win.
 
 ## Stage 4 — report
 
