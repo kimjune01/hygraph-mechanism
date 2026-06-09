@@ -191,14 +191,30 @@ the fix and let the differential carry the rest.
 - **Existence, not rate.** We look at merged instances and report counts, never a
   population resolve rate. The scope clause is stated wherever a number appears.
 
+## Documents
+
+- [`OPERATIONS.md`](OPERATIONS.md) — the runbook (stages 0–4, $0 pre-flight first).
+- [`docs/INHERITED-DISCIPLINE.md`](docs/INHERITED-DISCIPLINE.md) — every Pro/audit
+  lesson translated to this regime; two become new guards (Type III notes-control,
+  flat-graph negative control).
+- [`data/instances.jsonl`](data/instances.jsonl) ([schema](data/SCHEMA.md)) — the
+  pointer manifest: 81 merged PRs, gh-enriched (merge SHA, test files, topology),
+  with the eligibility funnel.
+
 ## Status / next steps
 
-- [ ] Recover as-of-first-PR snapshots from `repo-hypotheses/` git history vs PR
-      `created_at`; size the clean experimental pool.
-- [ ] Build the targeting join: topology score ⋀ issue age+demand ⋀
-      merged-with-test. Rank candidates.
-- [ ] Pick 3–5; reconstruct checkout + shipped test on EC2.
-- [ ] Run the with/without-graph ablation. Report survivors and the null.
+Stage 0 partly run (see [`OPERATIONS.md`](OPERATIONS.md)). The honest funnel:
+**81 merged → 49 bug-shaped → 32 graph-in-repo → 11 branchy → 1 clean
+merged-PR-to-own-graph link** (`hudson-trading/slang-server#342 → #310`). The
+blocker is **linkage, not compute**: the branchy graphs are mostly standalone
+investigations that never merged.
+
+- [x] Build the manifest; gh-enrich the 32 graph-bearing PRs.
+- [ ] Decide scope: recover more `[HG]`/issue links, relax provenance, or accept
+      small-N (OPERATIONS "Reality check").
+- [ ] Pre-submission snapshots from `repo-hypotheses/` git history vs PR `created_at`.
+- [ ] Gold-grade candidates (red-at-parent / green-on-gold), freeze KNOWN_BAD.
+- [ ] Reconstruct on EC2; run the three-arm ablation; report survivors and the null.
 
 ## Provenance
 
