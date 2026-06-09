@@ -29,6 +29,18 @@ otherwise**, both blind. The pool is 24 and we need a handful of existence cases
 treatment, not cancelled by the differential): regenerate only with a model whose
 cutoff predates the issue (Opus 4.7 / Sonnet 4.5).
 
+**Selection: craft-only failure is the selector, not graph topology** (pilot 01).
+The 3 "high-prior" cases were ranked by *historical* graph branchiness — but pilot
+01 showed that signal is false: `sql-metadata#401`'s branchy graph was review
+back-and-forth, not diagnostic depth, and the bug is a one-line fix craft-only
+solves unaided. So don't pre-guess difficulty. **Run craft-only (pre-cutoff model)
+across the 24-pool first; the instances where it _fails_ are the existence-case
+candidates, and +M is tested only there.** craft-only silently passing is itself
+data: a determined/easy instance, the Pro "craft-only ≈ recon" regime. See
+[`pilots/01-sql-metadata.md`](pilots/01-sql-metadata.md) — and note it also
+confirmed the reinvestigate-leak guard by catching a review-response graph in our
+top candidate.
+
 ## Stage 0 — $0 pre-flight (enrich, gold-grade, freeze)
 
 Per candidate, all free, all before tokens:
