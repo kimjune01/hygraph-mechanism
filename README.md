@@ -87,8 +87,25 @@ For a targeted set of instances (branchy graph ⋀ revealed-hard ⋀ merged-with
    - **without:** `craft( symptom + failing test )` — null handoff.
    - **with:** `craft( symptom + failing test + hypothesis graph )`.
 
-The graph is the **artifact under test**. Whatever generates it (the `investigate`
-/ `recon` inquiry process) is the **mechanism** the paper is about.
+The graph is the **artifact under test**; the **mechanism** the paper is about is
+the skill that generates it (`investigate` / `recon`).
+
+### The graph: historical or regenerated, both blind
+
+The conclusion does not depend on *when* the graph was made — the mechanism is the
+skill, and running it on the same issue reproduces a similar graph. So:
+
+- where a **historical** graph already covers the closing issue (the 3 high-prior
+  cases), use it: it was generated blind in May 2026 before the fix existed;
+- where none exists (the rest of the pool), **regenerate** it by running the skill
+  on the issue, blind to the PR and fix.
+
+One constraint makes "when" truly irrelevant: the graph is the **treatment** (only
+the with-arm gets it), so generator contamination does **not** cancel in the
+differential the way craft-model contamination does. Regenerate only with a model
+whose cutoff **predates the issue** (Opus 4.7 / Sonnet 4.5, as in the original
+run), or a current generator could leak a memorized fix into the graph and inflate
+the with-arm.
 
 ### What counts as gold: the merge, not the test
 
@@ -203,18 +220,21 @@ the fix and let the differential carry the rest.
 
 ## Status / next steps
 
-Stage 0 partly run (see [`OPERATIONS.md`](OPERATIONS.md)). The honest funnel:
-**81 merged → 49 bug-shaped → 32 graph-in-repo → 11 branchy → 1 clean
-merged-PR-to-own-graph link** (`hudson-trading/slang-server#342 → #310`). The
-blocker is **linkage, not compute**: the branchy graphs are mostly standalone
-investigations that never merged.
+Stage 0 run (see [`OPERATIONS.md`](OPERATIONS.md)). The regenerate design dissolves
+the linkage problem; the pool is the gradeable merged set:
 
-- [x] Build the manifest; gh-enrich the 32 graph-bearing PRs.
-- [ ] Decide scope: recover more `[HG]`/issue links, relax provenance, or accept
-      small-N (OPERATIONS "Reality check").
-- [ ] Pre-submission snapshots from `repo-hypotheses/` git history vs PR `created_at`.
-- [ ] Gold-grade candidates (red-at-parent / green-on-gold), freeze KNOWN_BAD.
-- [ ] Reconstruct on EC2; run the three-arm ablation; report survivors and the null.
+**81 merged → 60 with a closing issue → 24 also bug-shaped with a shipped
+(merge-certified) gold test → 3 high-prior** (a historical branchy graph already
+shows the mechanism engaged): `slang-server#342`, `sql-metadata#630`,
+`wild-linker/wild#1924`. We need a handful of existence cases; 24 shots is ample.
+
+- [x] Build the manifest; gh-enrich all 81 (closing issues, merge SHAs, shipped
+      tests); funnel to the 24-case pool.
+- [ ] Gold-grade the 3 high-prior (red-at-parent / green-on-gold on `parent_sha`),
+      freeze KNOWN_BAD.
+- [ ] Reconstruct on EC2; run the three-arm ablation (graph historical or
+      regenerated with a pre-cutoff model); grade by the merged test.
+- [ ] Flat-graph negative control + adversarial refute; report survivors and the null.
 
 ## Provenance
 

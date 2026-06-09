@@ -65,6 +65,20 @@ instrument bug), and the whole claim is suspect. The result is only trustworthy 
 **the gap tracks topology.** That specificity is the signature that survives a
 skeptic; a uniform gap does not.
 
+## New guard 3: the graph is the treatment, so pin the generator's cutoff
+
+The mechanism claim is differential (craft-model contamination cancels across
+arms), but the **graph is given only to the with-arm** — it is the treatment, not a
+shared covariate. So generator contamination does **not** cancel: a generator whose
+cutoff postdates the fix can leak a memorized solution into the graph, and "graph
+helps" becomes "the generator recalled the answer." Because the conclusion is
+invariant to *when* the graph was made (the skill reproduces it), we regenerate
+freely — but only with a model whose cutoff **predates the issue** (Opus 4.7 /
+Sonnet 4.5). This is the one place "regenerate now" is not free.
+
+(Corollary: the **pre-submission snapshot** guard below applies only if you reuse a
+*historical* graph; regenerating fresh sidesteps reinvestigate-leak entirely.)
+
 ## Capture and grading discipline (transfers directly)
 
 - **Capture source only.** Each ablation arm's diff is stripped of test files,
