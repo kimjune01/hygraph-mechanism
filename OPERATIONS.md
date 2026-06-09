@@ -52,7 +52,41 @@ Per candidate, all free, all before tokens:
 - **Freeze** the eligible set, the selection rule, and the KNOWN_BAD exclusions
   with reasons, committed, before any ablation verdict lands.
 
-## Stage 1 — reconstruct (per eligible instance)
+## Infrastructure — boxes (the repos do not fit locally)
+
+Reuse the Pro fleet; do not rebuild it. The relevant scripts in
+`swebench-pro/driver/`:
+
+- `provision_box.sh <name>` — one EC2 box: us-west-2, `m7i.xlarge`, 100 GB gp3
+  (`EBS_GB` override), AL2 + docker, `shutdown -h +180` + shutdown-behavior=terminate
+  (self-terminating), writes `/tmp/<name>.env` (KEY/PUBIP/IID/SG), prints `READY`.
+- `ablation_fleet.sh` — the arm harness: `smoke | provision N | status | checkpoint
+  | delta | teardown`, `WATCHDOG_MIN` self-terminate (720), pins claude+codex CLIs,
+  pushes Max OAuth + codex auth, git-inits the repo. **`ARM_RUNNER`/`ARM_LEDGER` are
+  the swap point** — the recon→ask swap it already does is our craft-only→+T→+G→+M
+  swap. `box_health.sh`, `drain_boxes.sh`, `coordinator.py` round it out.
+
+**What changes from Pro: there is no prebuilt image.** Pro pulled a per-instance
+Docker image; we clone an arbitrary repo and build from source at `parent_sha`. So
+the new, gating deliverable is a **per-repo build+test recipe** (clone, checkout
+`parent_sha`, install the repo's own toolchain, run its test red-at-parent). This is
+bespoke and is the reconstruct cost that does not shrink. First three:
+
+| repo | toolchain | recipe sketch | box |
+|---|---|---|---|
+| `macbre/sql-metadata` | Python | `pip install -e . && pytest test/test_unions.py` | m7i.xlarge / 100 GB |
+| `hudson-trading/slang-server` | C++/CMake | configure + build + `ctest` MarkupTests | m7i.xlarge / 100 GB |
+| `wild-linker/wild` | Rust (lld-class) | `cargo test` version-node case | m7i.2xlarge / 150 GB (LTO) |
+
+**Topology:** one box per repo (build toolchains conflict; isolation is mandatory),
+all four arms run on that box against the one checkout. **Sizing:** the 3 high-prior
+are moderate; the tier-2 tail (servo, godot, tidb, airflow) needs much bigger boxes
+and is a separate decision. **Cost:** EC2 is the only marginal cost (models on Max =
+$0); ~$0.20/box-hr, so the 3 high-prior end-to-end ≈ a few dollars. Self-terminate
+watchdog always on; warm each box's OAuth until it returns OK before dispatch
+(expires ~8h); git-init so codex doesn't refuse the dir.
+
+## Stage 1 — reconstruct (per eligible instance, on its box)
 
 Each repo on its own EC2 box (heavy-repo setup is the one cost that does not
 shrink; keep to the targeted few):
