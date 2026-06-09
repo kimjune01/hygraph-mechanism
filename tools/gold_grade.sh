@@ -15,7 +15,9 @@ TEST_RE="${TEST_RE:-(^|/)(test|tests|spec|__tests__)/|_test\.|\.test\.|_spec\.}"
 
 [ -d "$WORK/.git" ] || git clone -q "$REPO_URL" "$WORK"
 cd "$WORK" || exit 2
-git checkout -q "${MERGE}^1" || { echo "GRADE: FAIL (no base ${MERGE}^1)"; exit 2; }
+# hard-reset so a reused work dir can't leak a prior run's gold files into "base"
+git reset --hard -q "${MERGE}^1" 2>/dev/null && git clean -qfdx -e .venv 2>/dev/null \
+  || { echo "GRADE: FAIL (no base ${MERGE}^1)"; exit 2; }
 
 # split changed files into test vs source (bash 3.2 portable: no mapfile)
 FILES=()

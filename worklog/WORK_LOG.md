@@ -17,3 +17,15 @@ Key moves:
 - SELECTION FLIP: craft-only failure is the selector, not historical graph topology (false difficulty signal).
 
 Next: craft-only selection sweep across the 24-pool (pre-cutoff model) to surface instances where craft-only fails = the existence-case candidates; heavy repos (wild, slang-server) need boxes.
+
+### 16:10 — Python-batch gold-grade on EC2 box (3 PASS / 2 KNOWN_BAD)
+
+Default-to-box (repos too large for local). Built `tools/box_goldgrade.sh` (provision/grade/teardown around Pro `provision_box.sh`; pushes `gold_grade.sh` + recipes, runs the $0 red/green wall per recipe, writes `data/goldgrade.jsonl`). Fixed two `gold_grade.sh` bugs found in-flight — pre-flight tool, safe to edit: (1) work-dir reuse leaked prior-run gold files into "base" → hard `git reset --hard ^1 && git clean -fdx -e .venv`; (2) literal `$HOME` in remote work path → home-relative.
+
+Graded the 5 Python instances (pybox, m7i.xlarge):
+- **PASS** (eligible): `macbre/sql-metadata#630`, `mikey0000/PyMammotion#139`, `apache/airflow#66686`.
+- **KNOWN_BAD** (methodology data — merge-certified ≠ discriminating): `ag2ai/ag2#2805` non-discriminating oracle (gold = defensive `task=None` init; shipped test never reaches the branch that reads `task`, so green at base with/without fix); `scverse/pertpy#965` env-sensitive oracle (seaborn figsize ticklabel bug #755 doesn't reproduce under seaborn 0.13.2 → regression test passes at base; low diagnostic depth anyway).
+
+2/5 merged+shipped-test bugs fail the red/green wall — the wall earns its keep. Recipe gotchas frozen in `data/recipes.jsonl`: PyMammotion py3.14+pytest-asyncio; pertpy py3.12+formulaic+formulaic_contrasts; airflow fab provider needs `uv pip install -e ./devel-common` for the `tests_common` conftest plugin. Box torn down.
+
+Next: Rust (7) + Go (4) batches on their own boxes; then the craft-only selection sweep on the PASS pool.
