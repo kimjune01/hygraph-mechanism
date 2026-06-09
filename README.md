@@ -83,9 +83,13 @@ For a targeted set of instances (branchy graph ⋀ revealed-hard ⋀ merged-with
 1. Check out the repo at the **pre-merge parent commit** on an EC2 box.
 2. Recover the **symptom-only input** (the original issue text) and the **oracle**
    (the test the merged PR shipped: red at parent, green on the gold fix).
-3. Run craft two ways, graded by the merge-certified test:
-   - **without:** `craft( symptom + failing test )` — null handoff.
-   - **with:** `craft( symptom + failing test + hypothesis graph )`.
+3. Run the craft ablation ladder, graded by the merge-certified test. The core
+   existence claim is two arms; the full ladder adds the Pro vocab controls
+   ([`OPERATIONS.md`](OPERATIONS.md) Stage 2):
+   - **craft-only:** `craft( symptom + failing test )` — floor.
+   - **+M:** `craft( symptom + failing test + methodeutic graph )`.
+   - **+G / +T:** generic-rigor / minimal diagnosis artifacts — does the Peircean
+     vocabulary earn anything, or just generic structure? (re-tests the Pro null.)
 
 The graph is the **artifact under test**; the **mechanism** the paper is about is
 the skill that generates it (`investigate` / `recon`).

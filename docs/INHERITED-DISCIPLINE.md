@@ -38,10 +38,12 @@ load-bearing" are **two different claims**.
 - The existence claim we make is the narrow one: *this graph artifact is
   load-bearing* (with vs without). That is an honest existence proof and the
   default scope.
-- The stronger claim (*the typed structure beats generic notes*) requires a
-  **third arm**: `craft( symptom + test + equal-length generic notes )`. If graph
-  ≈ notes, the mechanism is "having notes," not methodeutics, and we say so. If
-  graph beats notes, the typed structure earned it.
+- The stronger claim (*the typed structure beats generic*) is the **+G and +T
+  arms** of the ladder (`swebench-pro/skills/generic`, `skills/minimal`): a
+  generic-rigor and a minimal diagnosis artifact in place of the methodeutic graph.
+  If +M ≈ +G, the mechanism is "having a structured diagnosis," not methodeutics,
+  and we say so. If +M beats +G, the Peircean structure earned it. This re-tests
+  the Pro diagnosis-recall null (M ≈ G ≈ T) in the regime where it could flip.
 - Do not let "the graph helped" silently inflate into "methodeutics helped." That
   substitution is the Type III error in this paper's clothing.
 
