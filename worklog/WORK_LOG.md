@@ -29,3 +29,20 @@ Graded the 5 Python instances (pybox, m7i.xlarge):
 2/5 merged+shipped-test bugs fail the red/green wall — the wall earns its keep. Recipe gotchas frozen in `data/recipes.jsonl`: PyMammotion py3.14+pytest-asyncio; pertpy py3.12+formulaic+formulaic_contrasts; airflow fab provider needs `uv pip install -e ./devel-common` for the `tests_common` conftest plugin. Box torn down.
 
 Next: Rust (7) + Go (4) batches on their own boxes; then the craft-only selection sweep on the PASS pool.
+
+### 18:40 — Corrected ablation protocol; pilots 02-03 (both null); harness validated
+
+Long methodology session, driven by user steers. Net: the protocol is now right and the harness runs end-to-end on real instances. Two committed nulls, no existence case yet, plus the selection heuristic to find one.
+
+Protocol corrections (all from the skeptic frame "was the hypothesis graph needed at all"):
+- **Oracle = the issue's ESSENCE, authored from the upstream issue, NOT the PR's shipped test.** The pool's PRs are the agentic pipeline's own (TDD tests = pipeline homework); grading +M against them is circular and reproduces SWE-bench-Pro over-credit. Essence oracle is mechanism-agnostic.
+- **Baseline = adapted mini-SWE-agent** (industry-recognized minimal, >74% Verified), not my improvised prompt. `tools/minimal_prompt.tmpl` = its verbatim system+instance prompt with litellm to codex, /testbed to box-sh, git-diff-submit to run-handle.
+- **Selector: blind-graph SIZE is a cheap leading indicator of diagnostic depth.** Deep graph means hard diagnosis means existence candidate. Blind-regenerated, not pilot-01's discredited historical-graph branchiness. Existence requires baseline to fail the ESSENCE.
+
+Pilots (both null):
+- **02 howsmyssl #301**: strict gold = craft-only FAIL / +M PASS, but craft-only PASSES the issue ESSENCE; the strict gap was Vary/wildcard/json-patch, all PR-side over-spec. Caught the over-credit failure mode.
+- **03 qrtool #695**: corrected protocol. Adapted mini-SWE-agent baseline PASSED essence in ~91s (5 LOC). +M moot. Shallow blind graph predicted it. Mechanism-agnostic oracle accepted exit-1/"could not find a QR code" where strict gold demanded exit-65/"no QR code found".
+
+Tools: box_goldgrade.sh, pipe_setup.sh, minimal_prompt.tmpl, /tmp/box-sh (base64 proxy to SUT). Gold-graded pool: 6 PASS (sql-metadata, PyMammotion, airflow, howsmyssl, toolhive, qrtool), 2 KNOWN_BAD (ag2, pertpy), wild BLOCKED (lld registry).
+
+Finding so far: in this pool the graph is mostly NOT needed (determined-cause regime), consistent with the manifesto ("bug-fix-shaped issues"). Existence cases live in the deep-graph tail: compiler/type-checker/linker internals. Next: recon-triage flux #833 (soundness hole), burn-onnx, tach by blind-graph depth; full ablation only on the big graphs.
