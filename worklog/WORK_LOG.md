@@ -46,3 +46,18 @@ Pilots (both null):
 Tools: box_goldgrade.sh, pipe_setup.sh, minimal_prompt.tmpl, /tmp/box-sh (base64 proxy to SUT). Gold-graded pool: 6 PASS (sql-metadata, PyMammotion, airflow, howsmyssl, toolhive, qrtool), 2 KNOWN_BAD (ag2, pertpy), wild BLOCKED (lld registry).
 
 Finding so far: in this pool the graph is mostly NOT needed (determined-cause regime), consistent with the manifesto ("bug-fix-shaped issues"). Existence cases live in the deep-graph tail: compiler/type-checker/linker internals. Next: recon-triage flux #833 (soundness hole), burn-onnx, tach by blind-graph depth; full ablation only on the big graphs.
+
+### 20:15 - The nulls are a SELECTION ARTIFACT (triage fast-paths easy bugs past the graph)
+
+Pilot 04 (slang-server #310) nulled too: deepest genuine graph in the pool, blind-reproduced, but the minimal mini-SWE-agent baseline implemented the correct dynamic N+1 delimiter in ~123s. Tally: 4 nulls, 0 existence cases.
+
+User's key insight (verified). The pipeline's issue-SELECTION skill biases the pool. Read sweep/skills/triage.md at the 2026-05-09 issue-scan commit (44ca3077):
+- Scoring rewards "clear repro (code fence / stack trace / steps)" +5 ("machine-leverage"); penalizes "no body / vague" -3; kill-list DROPs "vague, no repro, no error".
+- Prioritize order: "reproducible-locally > correctness > maintainer-filed".
+- The smoking gun: "Fix-ready fast-path. A 1-line fix with a confirmed reproducer doesn't need a hypothesis graph."
+
+So the pipeline ROUTES easy/reproducible bugs past the graph, and our pool (merged PR + shipped test) IS that fast-pathed subset. We measured the graph where the pipeline itself says it is not needed. The nulls EXONERATE the graph: selection artifact, not decoration.
+
+Existence-case condition (precise): reproducible (passes repro filter, gradeable) + cause hidden/non-local (NOT fix-ready) + terse report (issue does not hand over example/fix). Triage admits these (clear-repro scores +5 regardless of cause-hiddenness) but does not prioritize them, so a few leak into the merged pool.
+
+Reframe: the right pool is NOT merged fix-ready PRs; it is issues the pipeline sent to /investigate (graph-built) that were reproducible-but-hidden-cause. For now hunting the leaked ones: tidb #42770 (reproducible SQL panic, two-path scalar+vectorized fix -> not fix-ready). Gold-grading on gobox.
