@@ -1,0 +1,191 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..496adc16fe 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -20,8 +20,8 @@ use flux_middle::{
+     queries::QueryResult,
+     rty::{
+         BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FnSig, GenericArg, HoleKind,
+-        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, SortCtor, SubsetTy, Ty,
+-        TyKind, VariantIdx,
++        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, Sort, SortCtor, SubsetTy,
++        Ty, TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+         region_matching::{rty_match_regions, ty_match_regions},
+@@ -41,7 +41,6 @@ use rustc_type_ir::BoundVar;
+ use serde::Serialize;
+ 
+ use self::place_ty::{LocKind, PlacesTree};
+-use super::rty::Sort;
+ 
+ #[derive(Clone, Default)]
+ pub struct TypeEnv<'a> {
+@@ -141,6 +140,14 @@ impl<'a> TypeEnv<'a> {
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+         if result.is_strg && mutbl == Mutability::Mut {
+             Ok(Ty::ptr(PtrKind::Mut(re), result.path()))
++        } else if mutbl == Mutability::Mut && needs_tracked_reborrow(&result.ty) {
++            let ty = result.ty.clone();
++            result.block_with(ty.clone());
++            let name = infcx.define_unknown_var(&Sort::Loc);
++            let loc = Loc::from(name);
++            self.bindings
++                .insert(loc, LocKind::Reborrow(place.clone()), ty);
++            Ok(Ty::ptr(PtrKind::Mut(re), Path::from(loc)))
+         } else {
+             // FIXME(nilehmann) we should block the place here. That would require a notion
+             // of shared vs mutable block types because sometimes blocked places from a shared
+@@ -420,6 +427,24 @@ impl<'a> TypeEnv<'a> {
+     }
+ }
+ 
++fn needs_tracked_reborrow(ty: &Ty) -> bool {
++    if let TyKind::Indexed(BaseTy::Adt(adt, args), _) = ty.kind()
++        && let Some(variant) = adt.sort_def().opt_struct_variant()
++    {
++        let sort_args = adt
++            .sort_def()
++            .filter_generic_args(args)
++            .map(|arg| arg.expect_base().sort())
++            .collect_vec();
++        variant
++            .field_sorts(&sort_args)
++            .iter()
++            .any(|sort| matches!(sort, Sort::Func(_)))
++    } else {
++        false
++    }
++}
++
+ pub(crate) enum PtrToRefBound {
+     Ty(Ty),
+     Infer,
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..d7f909834e 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -18,7 +18,7 @@ use flux_rustc_bridge::mir::{FieldIdx, Place, PlaceElem};
+ use itertools::Itertools;
+ use rustc_data_structures::fx::FxIndexMap;
+ use rustc_hir::def_id::DefId;
+-use rustc_span::Span;
++use rustc_span::{DUMMY_SP, Span};
+ #[derive(Clone, Default)]
+ pub(crate) struct PlacesTree {
+     map: FxIndexMap<Loc, Binding>,
+@@ -36,6 +36,9 @@ pub(crate) enum LocKind {
+     Box(GenericArg),
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+     LocalPtr(Ty),
++    // A mutable reborrow of a place behind an existing reference. The place is blocked while the
++    // reborrow is live and updated with this location's type when the reborrow is unblocked.
++    Reborrow(Place),
+     Universal,
+ }
+ 
+@@ -129,6 +132,12 @@ impl PlacesTree {
+     }
+ 
+     pub fn unblock(&mut self, infcx: &mut InferCtxt, place: &Place) {
++        if let Some(binding) = self.remove_reborrow(place) {
++            let ty = infcx.hoister(true).hoist(&binding.ty.unblocked());
++            self.lookup(place, DUMMY_SP).update(ty);
++            return;
++        }
++
+         let mut cursor = self.cursor_for(place);
+         let mut ty = self.get_loc(&cursor.loc).ty.clone();
+         while let Some(elem) = cursor.next() {
+@@ -305,6 +314,22 @@ impl PlacesTree {
+             .collect()
+     }
+ 
++    fn remove_reborrow(&mut self, place: &Place) -> Option<Binding> {
++        let loc = self
++            .map
++            .iter()
++            .find_map(|(loc, binding)| {
++                if let LocKind::Reborrow(reborrowed_place) = &binding.kind
++                    && reborrowed_place == place
++                {
++                    Some(*loc)
++                } else {
++                    None
++                }
++            })?;
++        Some(self.remove(&loc))
++    }
++
+     fn remove(&mut self, loc: &Loc) -> Binding {
+         self.map
+             .shift_remove(loc)
+@@ -962,6 +987,7 @@ mod pretty {
+                 LocKind::Local | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+                 LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::Reborrow(place) => write!(f, "[reborrow({place:?})]"),
+             }
+         }
+     }
+diff --git a/tests/tests/neg/surface/composite_sort_setter.rs b/tests/tests/neg/surface/composite_sort_setter.rs
+new file mode 100644
+index 0000000000..4e1b5ca5a0
+--- /dev/null
++++ b/tests/tests/neg/surface/composite_sort_setter.rs
+@@ -0,0 +1,22 @@
++#[flux::opaque]
++#[flux::refined_by(len: int, hdl get: int -> bool)]
++struct Slot([bool]);
++
++impl Slot {
++    #[flux::trusted]
++    #[flux::sig(fn(self: &strg Slot[@n, @f]) ensures self: Slot[0, f])]
++    fn clear_len(&mut self) {}
++}
++
++#[flux::refined_by(slot: Slot)]
++struct Container<'a> {
++    #[flux::field({&mut Slot[slot] | slot.len > 0})]
++    slot: &'a mut Slot,
++}
++
++impl<'a> Container<'a> {
++    #[flux::sig(fn(self: &strg Container[@s]) ensures self: Container)]
++    fn update(&mut self) {
++        self.slot.clear_len();
++    } //~ ERROR type invariant may not hold
++}
+diff --git a/tests/tests/pos/surface/composite_sort_setter.rs b/tests/tests/pos/surface/composite_sort_setter.rs
+new file mode 100644
+index 0000000000..96a42fdf32
+--- /dev/null
++++ b/tests/tests/pos/surface/composite_sort_setter.rs
+@@ -0,0 +1,27 @@
++#[flux::opaque]
++#[flux::refined_by(len: int, hdl get: int -> bool)]
++struct Slot([bool]);
++
++impl Slot {
++    #[flux::trusted]
++    #[flux::sig(
++        fn(self: &strg Slot[@n, @f], i: usize{i < n})
++        ensures self: Slot[n, |j| j == i || f(j)]
++    )]
++    fn set(&mut self, i: usize) {
++        self.0[i] = true;
++    }
++}
++
++#[flux::refined_by(slot: Slot)]
++struct Container<'a> {
++    #[flux::field({&mut Slot[slot] | slot.len > 0})]
++    slot: &'a mut Slot,
++}
++
++impl<'a> Container<'a> {
++    #[flux::sig(fn(self: &strg Container[@s]) ensures self: Container)]
++    fn update(&mut self) {
++        self.slot.set(0);
++    }
++}
