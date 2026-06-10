@@ -1,0 +1,82 @@
+diff --git a/src/ingestion.rs b/src/ingestion.rs
+index e90d57a..5d940a2 100644
+--- a/src/ingestion.rs
++++ b/src/ingestion.rs
+@@ -4,16 +4,26 @@
+ 
+ use crate::{worker_pool::WorkerMessage, Keyspace};
+ use lsm_tree::{AnyIngestion, UserKey, UserValue};
++use std::sync::MutexGuard;
+ 
+ pub struct Ingestion<'a> {
+     keyspace: &'a Keyspace,
+     inner: AnyIngestion<'a>,
++    _ingest_clear_lock: MutexGuard<'a, ()>,
+ }
+ 
+ impl<'a> Ingestion<'a> {
+     pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
++        let ingest_clear_lock = keyspace
++            .ingest_clear_lock
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?;
+         let inner = keyspace.tree.ingestion()?;
+-        Ok(Self { keyspace, inner })
++        Ok(Self {
++            keyspace,
++            inner,
++            _ingest_clear_lock: ingest_clear_lock,
++        })
+     }
+ 
+     pub fn write<K: Into<UserKey>, V: Into<UserValue>>(
+diff --git a/src/keyspace/mod.rs b/src/keyspace/mod.rs
+index edee274..16b675a 100644
+--- a/src/keyspace/mod.rs
++++ b/src/keyspace/mod.rs
+@@ -25,7 +25,7 @@ use options::CreateOptions;
+ use std::{
+     ops::RangeBounds,
+     path::Path,
+-    sync::{atomic::AtomicBool, Arc, MutexGuard},
++    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+     time::Duration,
+ };
+ use write_delay::perform_write_stall;
+@@ -76,6 +76,9 @@ pub struct KeyspaceInner {
+     /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+     pub(crate) is_poisoned: Arc<AtomicBool>,
+ 
++    /// Serializes structural operations that replace/register table versions.
++    pub(crate) ingest_clear_lock: Mutex<()>,
++
+     /// LSM-tree wrapper
+     #[doc(hidden)]
+     pub tree: AnyTree,
+@@ -236,6 +239,10 @@ impl Keyspace {
+     pub fn clear(&self) -> crate::Result<()> {
+         use std::sync::atomic::Ordering;
+ 
++        let _ingest_clear_lock = self
++            .ingest_clear_lock
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?;
+         let mut journal_writer = self.supervisor.journal.get_writer();
+ 
+         // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+@@ -308,6 +315,7 @@ impl Keyspace {
+             name,
+             tree,
+             config,
++            ingest_clear_lock: Mutex::default(),
+             supervisor: db.supervisor.clone(),
+             worker_messager: db.worker_pool.sender.clone(),
+             is_deleted: AtomicBool::default(),
+@@ -352,6 +360,7 @@ impl Keyspace {
+             name,
+             config,
+             tree,
++            ingest_clear_lock: Mutex::default(),
+             is_deleted: AtomicBool::default(),
+             is_poisoned: db.is_poisoned.clone(),
+             stats: db.stats.clone(),

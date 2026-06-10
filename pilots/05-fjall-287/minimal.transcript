@@ -1,0 +1,3481 @@
+Reading additional input from stdin...
+OpenAI Codex v0.137.0
+--------
+workdir: /private/tmp
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: none
+reasoning summaries: none
+session id: 019eaf45-aaa3-71e3-a9b6-d9d6b8b980ee
+--------
+user
+You are a helpful assistant that can interact with a computer shell to solve programming tasks.
+
+<issue>
+The following bug was reported (this is the only specification you are given):
+Title: concurrent calls to `.clear()` and the ingestion API causes crash and corruption (fjall, a Rust LSM-tree storage engine)
+Body: Running this program eventually crashes and corrupts the database:
+
+```rust
+let db = fjall::Database::builder("./db").max_journaling_size(67108864).manual_journal_persist(true).open()?;
+std::thread::scope(|spawner| {
+    let keyspace = db.keyspace("keyspace1", fjall::KeyspaceCreateOptions::default).unwrap();
+    spawner.spawn({ let keyspace = keyspace.clone(); move || {
+        for _ in 0..1000 { keyspace.clear()?; std::thread::sleep(Duration::from_millis(10)); } Ok(()) }});
+    spawner.spawn({ let keyspace = keyspace.clone(); move || {
+        for _ in 0..1000 { let mut igst = keyspace.start_ingestion()?;
+            for i in 0..=10240 { igst.write(format!("key{i:09}"), [(i%256) as u8; 256])?; } igst.finish()?; } Ok(()) }});
+});
+```
+
+It eventually panics in a worker thread with `assertion left == right failed: invalid table IDs` (lsm-tree version management), poisons a lock, and the process hangs. The database is left corrupted, leaking thousands of versions under db/keyspaces/. The crash happens faster with manual_journal_persist(true). One thread clears the keyspace repeatedly while another ingests; they are not safely synchronized.
+
+</issue>
+
+<instructions>
+# Task Instructions
+
+## Overview
+
+You're a software engineer interacting continuously with a computer by submitting shell commands. You'll be helping fix the bug described in the issue above. Your task is specifically to make changes to non-test source files in order to fix the issue in a way that is general and consistent with the codebase.
+
+This is an interactive process: you think and issue commands, see the result, then think and issue your next command(s).
+
+## The shell
+
+The repository lives only on a remote box. You reach it ONLY through the proxy `/tmp/box-sh`, e.g. `/tmp/box-sh-min 'ls && sed -n "1,40p" src/keyspace/mod.rs'`. The proxy lands you in the repository root. Every command runs in a fresh subshell (directory and environment changes do NOT persist between commands; prefix with `cd ... && ...` within a single command if needed). Do not use your own local filesystem; it is an unrelated scratch dir.
+
+## Boundaries
+
+- MODIFY: regular source code files in the repository.
+- DO NOT MODIFY: test files, build/config files. Do NOT edit anything under `examples/` (that is the bug reproducer/oracle) or `tests/`, and do not inspect git history for "the fix" (it is not reachable).
+- Do not browse the web.
+
+## Recommended workflow
+
+1. Analyze the codebase by finding and reading relevant files (via the proxy).
+2. Reproduce the issue if you can.
+3. Edit the source to resolve the issue.
+4. Verify your fix.
+5. Test edge cases to ensure your fix is robust and general.
+
+## Test oracle
+
+A hidden test oracle is available. It prints only PASS or FAIL, never the test body:
+    /tmp/box-sh-min 'bash /tmp/fj_check.sh'
+It currently prints FAIL. Iterate until it prints PASS. Make a real fix consistent with the issue, not a hack targeted at the opaque oracle.
+
+## When done
+
+Stop as soon as the oracle prints PASS (or when you have exhausted reasonable effort). Then return a short final report: verdict (PASS/FAIL), the source file(s) and function(s) you changed, a one-paragraph description of the fix, and the repo-local `git diff --stat`. Your final message is a report for the orchestrator, not a user.
+</instructions>
+codex
+I’ll work through the remote repo via `/tmp/box-sh`, first locating the clear and ingestion paths plus the version assertion so the synchronization issue is fixed at the right boundary.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'rg --files . | sed \"s#"'^./##" | rg "(src|crates|lib|keyspace|ingest|version|lsm)"'"'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'rg -n \"start_ingestion|clear\\(|invalid table IDs|manual_journal_persist|KeyspaceCreateOptions\" . --glob \""'!tests/**" --glob "!examples/**"'"'" in /private/tmp
+ exited 127 in 706ms:
+bash: line 1: rg: command not found
+
+ exited 127 in 706ms:
+bash: line 1: rg: command not found
+bash: line 1: rg: command not found
+
+codex
+`rg` is not installed on the remote box, so I’m falling back to `find` and `grep` to map the relevant source.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'find . -path ./tests -prune -o -path ./examples -prune -o -type f -print | xargs grep -n \"start_ingestion\\|clear(\\|invalid table IDs\\|manual_journal_persist\\|KeyspaceCreateOptions\"'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'find . -type f | sed \"s#"'^./##" | grep -E "(src|crates|lib|keyspace|ingest|version|lsm)" | head -300'"'" in /private/tmp
+ succeeded in 600ms:
+examples/actix-kv/src/error.rs
+examples/actix-kv/src/main.rs
+examples/axum-kv/src/error.rs
+examples/axum-kv/src/main.rs
+examples/basic/src/main.rs
+examples/migration-lazy/src/main.rs
+examples/permuterm/src/main.rs
+examples/rolling-log/src/main.rs
+examples/secondary-index/src/main.rs
+examples/structured/src/main.rs
+examples/suffix-search/src/main.rs
+examples/tokio/src/main.rs
+examples/triplestore/src/main.rs
+examples/ttl-json/src/main.rs
+examples/tx-atomic-counter/src/main.rs
+examples/tx-cc/src/main.rs
+examples/tx-keyspace-move/.run
+examples/tx-keyspace-move/Cargo.toml
+examples/tx-keyspace-move/README.md
+examples/tx-keyspace-move/src/main.rs
+examples/tx-mpmc-queue/src/main.rs
+examples/tx-ssi-atomic-counter/src/main.rs
+examples/tx-ssi-cc/src/main.rs
+examples/tx-ssi-keyspace-move/.run
+examples/tx-ssi-keyspace-move/Cargo.toml
+examples/tx-ssi-keyspace-move/README.md
+examples/tx-ssi-keyspace-move/src/main.rs
+examples/tx-ssi-mpmc-queue/src/main.rs
+examples/unique-index/src/main.rs
+examples_disabled/migration/src/main.rs
+examples_disabled/tx-blob-cas/src/main.rs
+src/batch/item.rs
+src/batch/mod.rs
+src/builder.rs
+src/compaction/mod.rs
+src/compaction/worker.rs
+src/db.rs
+src/db_config.rs
+src/db_test.rs
+src/drop.rs
+src/error.rs
+src/file.rs
+src/flush/manager.rs
+src/flush/mod.rs
+src/flush/task.rs
+src/flush/worker.rs
+src/guard.rs
+src/ingestion.rs
+src/iter.rs
+src/journal/batch_reader.rs
+src/journal/entry.rs
+src/journal/error.rs
+src/journal/manager.rs
+src/journal/mod.rs
+src/journal/reader.rs
+src/journal/recovery.rs
+src/journal/test.rs
+src/journal/writer.rs
+src/keyspace/config/block_size.rs
+src/keyspace/config/compression.rs
+src/keyspace/config/filter.rs
+src/keyspace/config/hash_ratio.rs
+src/keyspace/config/mod.rs
+src/keyspace/config/pinning.rs
+src/keyspace/config/restart_interval.rs
+src/keyspace/mod.rs
+src/keyspace/name.rs
+src/keyspace/options.rs
+src/keyspace/test.rs
+src/keyspace/write_delay.rs
+src/lib.rs
+src/locked_file.rs
+src/meta_keyspace.rs
+src/path.rs
+src/poison_dart.rs
+src/readable.rs
+src/recovery.rs
+src/snapshot.rs
+src/snapshot_nonce.rs
+src/snapshot_tracker.rs
+src/stats.rs
+src/supervisor.rs
+src/tx/mod.rs
+src/tx/optimistic/conflict_manager.rs
+src/tx/optimistic/keyspace.rs
+src/tx/optimistic/mod.rs
+src/tx/optimistic/oracle.rs
+src/tx/optimistic/write_tx.rs
+src/tx/single_writer/keyspace.rs
+src/tx/single_writer/mod.rs
+src/tx/single_writer/write_tx.rs
+src/tx/write_tx.rs
+src/version.rs
+src/worker_pool.rs
+src/write_buffer_manager.rs
+test_fixture/v1_keyspace/journals/2/0
+test_fixture/v1_keyspace/journals/2/1
+test_fixture/v1_keyspace/journals/2/2
+test_fixture/v1_keyspace/journals/2/3
+test_fixture/v1_keyspace/partitions/a/config
+test_fixture/v1_keyspace/partitions/a/levels
+test_fixture/v1_keyspace/partitions/a/segments/0
+test_fixture/v1_keyspace/partitions/a/version
+test_fixture/v1_keyspace/partitions/b/config
+test_fixture/v1_keyspace/partitions/b/levels
+test_fixture/v1_keyspace/partitions/b/segments/1
+test_fixture/v1_keyspace/partitions/b/version
+test_fixture/v1_keyspace/partitions/c/config
+test_fixture/v1_keyspace/partitions/c/levels
+test_fixture/v1_keyspace/partitions/c/version
+test_fixture/v1_keyspace/version
+test_fixture/v1_keyspace_corrupt_journal/journals/2/0
+test_fixture/v1_keyspace_corrupt_journal/journals/2/1
+test_fixture/v1_keyspace_corrupt_journal/journals/2/2
+test_fixture/v1_keyspace_corrupt_journal/journals/2/3
+test_fixture/v1_keyspace_corrupt_journal/partitions/a/config
+test_fixture/v1_keyspace_corrupt_journal/partitions/a/levels
+test_fixture/v1_keyspace_corrupt_journal/partitions/a/segments/0
+test_fixture/v1_keyspace_corrupt_journal/partitions/a/version
+test_fixture/v1_keyspace_corrupt_journal/partitions/b/config
+test_fixture/v1_keyspace_corrupt_journal/partitions/b/levels
+test_fixture/v1_keyspace_corrupt_journal/partitions/b/segments/1
+test_fixture/v1_keyspace_corrupt_journal/partitions/b/version
+test_fixture/v1_keyspace_corrupt_journal/partitions/c/config
+test_fixture/v1_keyspace_corrupt_journal/partitions/c/levels
+test_fixture/v1_keyspace_corrupt_journal/partitions/c/version
+test_fixture/v1_keyspace_corrupt_journal/version
+test_fixture/v2_keyspace/journals/2
+test_fixture/v2_keyspace/partitions/default1/config
+test_fixture/v2_keyspace/partitions/default1/levels
+test_fixture/v2_keyspace/partitions/default1/manifest
+test_fixture/v2_keyspace/partitions/default1/segments/0
+test_fixture/v2_keyspace/partitions/default2/blobs/.vlog
+test_fixture/v2_keyspace/partitions/default2/blobs/segments/0
+test_fixture/v2_keyspace/partitions/default2/blobs/vlog_manifest
+test_fixture/v2_keyspace/partitions/default2/config
+test_fixture/v2_keyspace/partitions/default2/levels
+test_fixture/v2_keyspace/partitions/default2/manifest
+test_fixture/v2_keyspace/partitions/default2/segments/0
+test_fixture/v2_keyspace/version
+test_fixture/v2_keyspace_corrupt_journal/journals/2
+test_fixture/v2_keyspace_corrupt_journal/partitions/default1/config
+test_fixture/v2_keyspace_corrupt_journal/partitions/default1/levels
+test_fixture/v2_keyspace_corrupt_journal/partitions/default1/manifest
+test_fixture/v2_keyspace_corrupt_journal/partitions/default1/segments/0
+test_fixture/v2_keyspace_corrupt_journal/partitions/default2/blobs/.vlog
+test_fixture/v2_keyspace_corrupt_journal/partitions/default2/blobs/segments/0
+test_fixture/v2_keyspace_corrupt_journal/partitions/default2/blobs/vlog_manifest
+test_fixture/v2_keyspace_corrupt_journal/partitions/default2/config
+test_fixture/v2_keyspace_corrupt_journal/partitions/default2/levels
+test_fixture/v2_keyspace_corrupt_journal/partitions/default2/manifest
+test_fixture/v2_keyspace_corrupt_journal/partitions/default2/segments/0
+test_fixture/v2_keyspace_corrupt_journal/version
+test_fixture/v2_sealed_journal_shenanigans/version
+tests/ingest_recovery.rs
+tests/keyspace_clear.rs
+tests/keyspace_iter_lifetime.rs
+tests/keyspace_recover.rs
+tests/keyspace_snapshot.rs
+tests/keyspace_v1_load_fixture.rs
+tests/keyspace_v2_load_fixture.rs
+tests/recovery_keyspaces_mac.rs
+target/release/deps/libcfg_if-e7a7221cad5f9b8a.rmeta
+target/release/deps/librand-3d3a5c660acff60a.rlib
+target/release/deps/libcfg_if-e7a7221cad5f9b8a.rlib
+target/release/deps/libunicode_ident-22e899d242db5310.rmeta
+target/release/deps/libhashbrown-47ae3449fc6070e0.rlib
+target/release/deps/libunicode_ident-22e899d242db5310.rlib
+target/release/deps/librand_core-0f60ee7a5170062e.rmeta
+target/release/deps/libflume-0a448ae765cab06a.rmeta
+target/release/deps/liblsm_tree-c4159c772f338a3e.rlib
+target/release/deps/librand_core-0f60ee7a5170062e.rlib
+target/release/deps/libc-f6a21130ff904541.d
+target/release/deps/liblog-1b3603372725f5d7.rmeta
+target/release/deps/libbyteview-e0bbc63853048306.rmeta
+target/release/deps/liblog-1b3603372725f5d7.rlib
+target/release/deps/libproc_macro2-edb92f6c4207c94f.rmeta
+target/release/deps/libnanoid-e3ec193425f0b9e5.rlib
+target/release/deps/libanstream-556777956140d48b.rlib
+target/release/deps/libinterval_heap-df59c460c7b3ddd3.rmeta
+target/release/deps/libinterval_heap-df59c460c7b3ddd3.rlib
+target/release/deps/libenum_dispatch-e021f6845af2a19f.so
+target/release/deps/libspin-6d8afa2ac72304b3.rmeta
+target/release/deps/librand-b3365f696639bca2.rlib
+target/release/deps/libproc_macro2-edb92f6c4207c94f.rlib
+target/release/deps/libscopeguard-50d2e68a5c09cca9.rmeta
+target/release/deps/libvarint_rs-6e8037412bae0bfa.rmeta
+target/release/deps/libscopeguard-50d2e68a5c09cca9.rlib
+target/release/deps/libquote-e5bd6df372664d92.rmeta
+target/release/deps/libcrossbeam_utils-1147b36a339d42db.rmeta
+target/release/deps/libquote-e5bd6df372664d92.rlib
+target/release/deps/liblock_api-a2c295270a87af63.rmeta
+target/release/deps/libtest_log_macros-5f77957081b80193.so
+target/release/deps/liblock_api-a2c295270a87af63.rlib
+target/release/deps/libenv_filter-dc1f09e5160ac507.rlib
+target/release/deps/libcrossbeam_utils-1147b36a339d42db.rlib
+target/release/deps/liblibc-f6a21130ff904541.rmeta
+target/release/deps/liblibc-f6a21130ff904541.rlib
+target/release/deps/libgetrandom-f8f3e153f6bcab9a.rmeta
+target/release/deps/libflume-0a448ae765cab06a.rlib
+target/release/deps/libgetrandom-f8f3e153f6bcab9a.rlib
+target/release/deps/liblinux_raw_sys-af513a950fd2fbfb.rmeta
+target/release/deps/liblinux_raw_sys-af513a950fd2fbfb.rlib
+target/release/deps/libgetrandom-db7ef8dabb0200f0.rmeta
+target/release/deps/libfjall-eaaf3273c9b717a5.rlib
+target/release/deps/libgetrandom-db7ef8dabb0200f0.rlib
+target/release/deps/libonce_cell-d749050a1d9f133a.rmeta
+target/release/deps/libonce_cell-d749050a1d9f133a.rlib
+target/release/deps/libutf8parse-6b2d7ee988a083c8.rmeta
+target/release/deps/libtest_log-20f1f78efcca91fb.rmeta
+target/release/deps/libutf8parse-6b2d7ee988a083c8.rlib
+target/release/deps/libbitflags-c1c1aa79fceb745e.rmeta
+target/release/deps/libanstyle_parse-a9459d2565cf683d.rmeta
+target/release/deps/libanstyle_parse-a9459d2565cf683d.rlib
+target/release/deps/libbitflags-c1c1aa79fceb745e.rlib
+target/release/deps/librand_core-233411789aff5dbd.rmeta
+target/release/deps/librand_core-233411789aff5dbd.rlib
+target/release/deps/libcrossbeam_epoch-fe4707aed701d01a.rmeta
+target/release/deps/libbyteview-e0bbc63853048306.rlib
+target/release/deps/libcrossbeam_epoch-fe4707aed701d01a.rlib
+target/release/deps/libequivalent-ff896c9c71a2a7c4.rmeta
+target/release/deps/libdashmap-45d759440347d5df.rmeta
+target/release/deps/libequivalent-ff896c9c71a2a7c4.rlib
+target/release/deps/libanstyle-865d3f43c13ab2b2.rmeta
+target/release/deps/libanyhow-3b5d5b60697a2809.rmeta
+target/release/deps/libanstyle-865d3f43c13ab2b2.rlib
+target/release/deps/libxxhash_rust-20e61a11caad96b7.rmeta
+target/release/deps/libsyn-b061a95183ee6d78.rmeta
+target/release/deps/libtempfile-8fdae7afd16e9731.rmeta
+target/release/deps/libcpufeatures-6b56a3ab177b1d16.rlib
+target/release/deps/libfjall-eaaf3273c9b717a5.rmeta
+target/release/deps/libxxhash_rust-20e61a11caad96b7.rlib
+target/release/deps/libhashbrown-47ae3449fc6070e0.rmeta
+target/release/deps/librustix-f1f79b81cae393c6.rmeta
+target/release/deps/libbyteorder_lite-95124790f39b1a34.rmeta
+target/release/deps/libtest_log-20f1f78efcca91fb.rlib
+target/release/deps/libbyteorder_lite-95124790f39b1a34.rlib
+target/release/deps/libtest_log_core-84757d56294d3aad.rmeta
+target/release/deps/libspin-6d8afa2ac72304b3.rlib
+target/release/deps/libnanoid-e3ec193425f0b9e5.rmeta
+target/release/deps/libfastrand-a093973bbcf0ed4c.rmeta
+target/release/deps/libdashmap-45d759440347d5df.rlib
+target/release/deps/libfastrand-a093973bbcf0ed4c.rlib
+target/release/deps/libtwox_hash-ec0c3543e2f16cad.rmeta
+target/release/deps/libenv_logger-121659170074dd25.rlib
+target/release/deps/libtwox_hash-ec0c3543e2f16cad.rlib
+target/release/deps/libquick_cache-2248b9f62851a21b.rmeta
+target/release/deps/liblz4_flex-1ebafc5956e0e967.rmeta
+target/release/deps/libsfa-7374b9723bdfad84.rmeta
+target/release/deps/libcpufeatures-6b56a3ab177b1d16.rmeta
+target/release/deps/libsyn-b061a95183ee6d78.rlib
+target/release/deps/libcompare-3f52c27563b009c8.rmeta
+target/release/deps/libcompare-3f52c27563b009c8.rlib
+target/release/deps/libhashbrown-3fc6326a7f495f39.rmeta
+target/release/deps/libanstyle_query-fc8b3c69b0938db2.rmeta
+target/release/deps/libhashbrown-3fc6326a7f495f39.rlib
+target/release/deps/libanstyle_query-fc8b3c69b0938db2.rlib
+target/release/deps/libis_terminal_polyfill-fdd619843df83abd.rmeta
+target/release/deps/libcrossbeam_skiplist-f80031b8084750ba.rlib
+target/release/deps/libis_terminal_polyfill-fdd619843df83abd.rlib
+target/release/deps/libonce_cell-6add06ccb28306f4.rmeta
+target/release/deps/liblsm_tree-c4159c772f338a3e.rmeta
+target/release/deps/libonce_cell-6add06ccb28306f4.rlib
+target/release/deps/libcolorchoice-7a01189a837280c3.rmeta
+target/release/deps/libchacha20-54fe772fa8868b42.rlib
+target/release/deps/libcolorchoice-7a01189a837280c3.rlib
+target/release/deps/libsmallvec-78439747f3805a32.rmeta
+target/release/deps/librand-3d3a5c660acff60a.rmeta
+target/release/deps/libsmallvec-78439747f3805a32.rlib
+target/release/deps/libzerocopy-3ce921905c4a100c.rmeta
+target/release/deps/libcrossbeam_skiplist-f80031b8084750ba.rmeta
+target/release/deps/libzerocopy-3ce921905c4a100c.rlib
+target/release/deps/librustix-f1f79b81cae393c6.rlib
+target/release/deps/libanstream-556777956140d48b.rmeta
+target/release/deps/libparking_lot_core-1be40744be5ef240.rmeta
+target/release/deps/libppv_lite86-be7158a23e7af536.rmeta
+target/release/deps/libtest_log_core-84757d56294d3aad.rlib
+target/release/deps/liblz4_flex-1ebafc5956e0e967.rlib
+target/release/deps/libppv_lite86-be7158a23e7af536.rlib
+target/release/deps/libparking_lot_core-1be40744be5ef240.rlib
+target/release/deps/libenv_filter-dc1f09e5160ac507.rmeta
+target/release/deps/libvarint_rs-6e8037412bae0bfa.rlib
+target/release/deps/librand_chacha-13ee6d96e6b69685.rmeta
+target/release/deps/libquick_cache-2248b9f62851a21b.rlib
+target/release/deps/librand_chacha-13ee6d96e6b69685.rlib
+target/release/deps/libsfa-7374b9723bdfad84.rlib
+target/release/deps/librustc_hash-d4fe389d848b0efa.rmeta
+target/release/deps/librustc_hash-d4fe389d848b0efa.rlib
+target/release/deps/libself_cell-789de535d1db2565.rmeta
+target/release/deps/librand-b3365f696639bca2.rmeta
+target/release/deps/libself_cell-789de535d1db2565.rlib
+target/release/deps/libtempfile-8fdae7afd16e9731.rlib
+target/release/deps/libchacha20-54fe772fa8868b42.rmeta
+target/release/deps/libanyhow-3b5d5b60697a2809.rlib
+target/release/deps/lsm_tree-c4159c772f338a3e.d
+target/release/deps/libenv_logger-121659170074dd25.rmeta
+target/release/.fingerprint/anyhow-3b5d5b60697a2809/dep-lib-anyhow
+target/release/.fingerprint/anyhow-3b5d5b60697a2809/lib-anyhow
+target/release/.fingerprint/anyhow-3b5d5b60697a2809/lib-anyhow.json
+target/release/.fingerprint/byteorder-lite-95124790f39b1a34/dep-lib-byteorder_lite
+
+ succeeded in 1002ms:
+grep: ./.git/objects/pack/pack-5e3daa809c9e1e5afdda6f7721ff7975476f474a.pack: binary file matches
+./README.md:66:use fjall::{Database, KeyspaceCreateOptions, PersistMode};
+./README.md:75:    let items = db.keyspace("my_items", KeyspaceCreateOptions::default)?;
+./README.md:138:Additionally, orthogonally to the block cache, each `Keyspace` has its own write buffer (["Memtable"](https://docs.rs/fjall/latest/fjall/struct.KeyspaceCreateOptions.html#method.max_memtable_size)) which is the unit of data flushed back into the "proper" index structure.
+./examples_disabled/tx-blob-cas/src/main.rs:2:    GarbageCollection, KeyspaceCreateOptions, KvSeparationOptions, PersistMode, TxDatabase,
+./examples_disabled/tx-blob-cas/src/main.rs:26:            KeyspaceCreateOptions::default()
+./src/builder.rs:60:    pub fn manual_journal_persist(mut self, flag: bool) -> Self {
+./src/builder.rs:61:        self.inner.manual_journal_persist = flag;
+./src/builder.rs:147:    /// # use fjall::{PersistMode, Database, KeyspaceCreateOptions};
+./src/builder.rs:168:    /// # use fjall::{PersistMode, Database, KeyspaceCreateOptions};
+./src/db.rs:24:    HashMap, Keyspace, KeyspaceCreateOptions,
+./src/db.rs:87:        self.supervisor.flush_manager.clear();
+./src/db.rs:92:            .clear();
+./src/db.rs:97:            .clear();
+./src/db.rs:170:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/db.rs:174:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db.rs:193:        if !self.config.manual_journal_persist {
+./src/db.rs:271:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/db.rs:305:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/db.rs:309:    /// # let _tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db.rs:338:    /// # use fjall::{PersistMode, Database, KeyspaceCreateOptions};
+./src/db.rs:341:    /// let items = db.keyspace("my_items", KeyspaceCreateOptions::default)?;
+./src/db.rs:454:        create_options: impl FnOnce() -> KeyspaceCreateOptions,
+./src/db.rs:518:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/db.rs:523:    /// db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db.rs:739:                        keyspace.tree.clear().ok();
+./src/db_config.rs:39:    pub(crate) manual_journal_persist: bool,
+./src/db_config.rs:80:            manual_journal_persist: false,
+./src/db_test.rs:1:use crate::{Database, KeyspaceCreateOptions, KvSeparationOptions};
+./src/db_test.rs:6:    use crate::{Database, KeyspaceCreateOptions};
+./src/db_test.rs:13:        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db_test.rs:19:        tree.clear()?;
+./src/db_test.rs:33:        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db_test.rs:98:    use crate::{Database, KeyspaceCreateOptions};
+./src/db_test.rs:105:        let tree = db.keyspace("tree", KeyspaceCreateOptions::default)?;
+./src/db_test.rs:106:        let tree2 = db.keyspace("tree1", KeyspaceCreateOptions::default)?;
+./src/db_test.rs:125:        let tree = db.keyspace(name, KeyspaceCreateOptions::default)?;
+./src/db_test.rs:141:        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db_test.rs:164:        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db_test.rs:179:        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/db_test.rs:196:            KeyspaceCreateOptions::default()
+./src/db_test.rs:221:            KeyspaceCreateOptions::default().max_memtable_size(1_000)
+./src/db_test.rs:224:            KeyspaceCreateOptions::default()
+./src/flush/manager.rs:27:    pub fn clear(&self) {
+./src/journal/manager.rs:69:    pub(crate) fn clear(&mut self) {
+./src/journal/manager.rs:70:        self.items.clear();
+./src/journal/writer.rs:271:        self.buf.clear();
+./src/journal/writer.rs:273:        self.buf.clear();
+./src/journal/writer.rs:293:        self.buf.clear();
+./src/journal/writer.rs:300:    pub(crate) fn write_clear(
+./src/journal/writer.rs:310:        self.buf.clear();
+./src/journal/writer.rs:312:        self.buf.clear();
+./src/journal/writer.rs:319:        self.buf.clear();
+./src/journal/writer.rs:338:        self.buf.clear();
+./src/journal/writer.rs:348:        self.buf.clear();
+./src/journal/writer.rs:372:            self.buf.clear();
+./src/keyspace/mod.rs:200:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:204:    /// let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:219:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:223:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:227:    /// tree.clear()?;
+./src/keyspace/mod.rs:236:    pub fn clear(&self) -> crate::Result<()> {
+./src/keyspace/mod.rs:248:        journal_writer.write_clear(self.id, seqno)?;
+./src/keyspace/mod.rs:250:        if !self.config.manual_journal_persist {
+./src/keyspace/mod.rs:260:        self.tree.clear()?;
+./src/keyspace/mod.rs:295:    pub fn start_ingestion(&self) -> crate::Result<Ingestion<'_>> {
+./src/keyspace/mod.rs:384:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:388:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:405:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:409:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:432:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:436:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:457:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:461:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:486:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:490:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:521:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:525:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:557:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:561:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:582:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:586:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:607:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:611:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:632:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:636:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:658:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:662:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:682:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:686:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:890:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:894:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:930:        if !self.config.manual_journal_persist {
+./src/keyspace/mod.rs:960:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:964:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:1001:        if !self.config.manual_journal_persist {
+./src/keyspace/mod.rs:1042:    /// # use fjall::{Database, KeyspaceCreateOptions};
+./src/keyspace/mod.rs:1046:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/keyspace/mod.rs:1090:        if !self.config.manual_journal_persist {
+./src/keyspace/options.rs:73:    pub(crate) manual_journal_persist: bool,
+./src/keyspace/options.rs:89:            manual_journal_persist: false,
+./src/keyspace/options.rs:335:        let manual_journal_persist = meta_keyspace
+./src/keyspace/options.rs:336:            .get_kv_for_config(keyspace_id, "manual_journal_persist")?
+./src/keyspace/options.rs:367:            manual_journal_persist,
+./src/keyspace/options.rs:456:                let key = encode_config_key(keyspace_id, "manual_journal_persist");
+./src/keyspace/options.rs:457:                (key, [u8::from(self.manual_journal_persist)].into())
+./src/keyspace/options.rs:646:    pub fn manual_journal_persist(mut self, flag: bool) -> Self {
+./src/keyspace/options.rs:647:        self.manual_journal_persist = flag;
+./src/keyspace/test.rs:1:use crate::{Database, KeyspaceCreateOptions, UserKey, UserValue};
+./src/keyspace/test.rs:9:    let items = db.keyspace("items", KeyspaceCreateOptions::default)?;
+./src/keyspace/test.rs:12:        let mut ingest = items.start_ingestion()?;
+./src/keyspace/test.rs:27:        let mut ingest = items.start_ingestion()?;
+./src/keyspace/test.rs:42:        let mut ingest = items.start_ingestion()?;
+./src/keyspace/test.rs:57:        let mut ingest = items.start_ingestion()?;
+./src/lib.rs:29://! use fjall::{PersistMode, Database, KeyspaceCreateOptions};
+./src/lib.rs:39://! let items = db.keyspace("my_items", KeyspaceCreateOptions::default)?;
+./src/lib.rs:154:    keyspace::{options::CreateOptions as KeyspaceCreateOptions, Keyspace},
+./src/meta_keyspace.rs:205:    use crate::{Database, Guard, KeyspaceCreateOptions, Readable, SingleWriterTxDatabase};
+./src/meta_keyspace.rs:221:            let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/meta_keyspace.rs:250:            let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/meta_keyspace.rs:266:            let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/meta_keyspace.rs:293:            let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/meta_keyspace.rs:324:            let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/meta_keyspace.rs:343:                let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/meta_keyspace.rs:377:        let keyspace = db.keyspace(keyspace_name, KeyspaceCreateOptions::default)?;
+./src/meta_keyspace.rs:384:            .keyspace("default", KeyspaceCreateOptions::default)
+./src/readable.rs:18:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:22:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:52:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:56:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:80:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:84:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:102:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:106:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:123:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:127:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:159:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:163:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:190:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:194:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:217:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:221:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readable.rs:261:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:265:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/readablegrep: ./target/release/examples/repro287-7bb5b4e54356e241: binary file matches
+grep: ./target/release/examples/repro287: binary file matches
+grep: ./target/release/deps/libhashbrown-47ae3449fc6070e0.rlib: binary file matches
+.rs:287:    /// # use fjall::{Database, KeyspaceCreateOptions, Readable};
+./src/readable.rs:291:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/recovery.rs:11:        apply_to_base_config, options::CreateOptions as KeyspaceCreateOptions, InternalKeyspaceId,
+./src/recovery.rs:76:        let mut recovered_config = KeyspaceCreateOptions::from_kvs(keyspace_id, &db.meta_keyspace)?;
+./src/recovery.rs:205:                handle.tree.clear().ok();
+./src/tx/optimistic/keyspace.rs:41:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:45:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:67:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:72:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:106:    /// # use fjall::{OptimisticTxDatabase, Slice, KeyspaceCreateOptions};
+./src/tx/optimistic/keyspace.rs:111:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:124:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:129:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:175:    /// # use fjall::{OptimisticTxDatabase, Slice, KeyspaceCreateOptions};
+./src/tx/optimistic/keyspace.rs:180:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:193:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:198:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:241:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:245:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:284:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:288:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:334:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:338:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:369:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:373:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:396:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:400:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:424:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:428:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:450:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:454:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/keyspace.rs:475:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/keyspace.rs:479:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/mod.rs:13:    Config, Database, KeyspaceCreateOptions, PersistMode, Snapshot,
+./src/tx/optimistic/mod.rs:78:        if !self.inner.config.manual_journal_persist {
+./src/tx/optimistic/mod.rs:100:    /// # use fjall::{PersistMode, OptimisticTxDatabase, KeyspaceCreateOptions};
+./src/tx/optimistic/mod.rs:103:    /// let items = db.keyspace("my_items", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/mod.rs:136:        create_options: impl FnOnce() -> KeyspaceCreateOptions,
+./src/tx/optimistic/oracle.rs:77:    use crate::{KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace, Readable};
+./src/tx/optimistic/oracle.rs:105:        let part = db.keyspace("foo", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:145:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/write_tx.rs:150:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:183:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable, Slice};
+./src/tx/optimistic/write_tx.rs:187:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:203:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/write_tx.rs:208:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:250:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable, Slice};
+./src/tx/optimistic/write_tx.rs:254:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:270:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/write_tx.rs:275:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:320:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/write_tx.rs:324:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:359:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/write_tx.rs:363:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:403:    /// # use fjall::{OptimisticTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/optimistic/write_tx.rs:407:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/optimistic/write_tx.rs:467:        Conflict, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace, Readable,
+./src/tx/optimistic/write_tx.rs:492:        let tree = db.keyspace("foo", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:40:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:44:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:66:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:71:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:99:    /// # use fjall::{SingleWriterTxDatabase, Slice, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:104:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:117:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions};
+./src/tx/single_writer/keyspace.rs:122:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:161:    /// # use fjall::{SingleWriterTxDatabase, Slice, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:166:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:179:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:184:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:225:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:229:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:261:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:265:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:304:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:308:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:336:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:340:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:363:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:367:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:391:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:395:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:417:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:421:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/keyspace.rs:442:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/keyspace.rs:446:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/mod.rs:9:    keyspace::KeyspaceKey, Config, Database, KeyspaceCreateOptions, PersistMode, Snapshot,
+./src/tx/single_writer/mod.rs:69:        if !self.inner.config.manual_journal_persist {
+./src/tx/single_writer/mod.rs:91:    /// # use fjall::{PersistMode, SingleWriterTxDatabase, KeyspaceCreateOptions};
+./src/tx/single_writer/mod.rs:94:    /// let items = db.keyspace("my_items", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/mod.rs:127:        create_options: impl FnOnce() -> KeyspaceCreateOptions,
+./src/tx/single_writer/write_tx.rs:100:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/write_tx.rs:105:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/write_tx.rs:138:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Slice, Readable};
+./src/tx/single_writer/write_tx.rs:142:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/write_tx.rs:158:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/write_tx.rs:163:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/write_tx.rs:197:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Slice, Readable};
+./src/tx/single_writer/write_tx.rs:201:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/write_tx.rs:217:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/write_tx.rs:222:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/write_tx.rs:259:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/write_tx.rs:263:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/write_tx.rs:294:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/write_tx.rs:298:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/single_writer/write_tx.rs:334:    /// # use fjall::{SingleWriterTxDatabase, KeyspaceCreateOptions, Readable};
+./src/tx/single_writer/write_tx.rs:338:    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+./src/tx/write_tx.rs:363:        KeyspaceCreateOptions, SingleWriterTxDatabase,
+./src/tx/write_tx.rs:379:        let tree = db.keyspace("foo", KeyspaceCreateOptions::default)?;
+grep: ./target/release/deps/liblsm_tree-c4159c772f338a3e.rlib: binary file matches
+grep: ./target/release/deps/libscopeguard-50d2e68a5c09cca9.rmeta: binary file matches
+grep: ./target/release/deps/libscopeguard-50d2e68a5c09cca9.rlib: binary file matches
+grep: ./target/release/deps/libfjall-eaaf3273c9b717a5.rlib: binary file matches
+grep: ./target/release/deps/libdashmap-45d759440347d5df.rmeta: binary file matches
+grep: ./target/release/deps/libanstyle-865d3f43c13ab2b2.rmeta: binary file matches
+grep: ./target/release/deps/libanstyle-865d3f43c13ab2b2.rlib: binary file matches
+grep: ./target/release/deps/libfjall-eaaf3273c9b717a5.rmeta: binary file matches
+grep: ./target/release/deps/libhashbrown-47ae3449fc6070e0.rmeta: binary file matches
+grep: ./target/release/deps/libdashmap-45d759440347d5df.rlib: binary file matches
+grep: ./target/release/deps/libhashbrown-3fc6326a7f495f39.rmeta: binary file matches
+grep: ./target/release/deps/libhashbrown-3fc6326a7f495f39.rlib: binary file matches
+grep: ./target/release/deps/libcrossbeam_skiplist-f80031b8084750ba.rlib: binary file matches
+grep: ./target/release/deps/libcrossbeam_skiplist-f80031b8084750ba.rmeta: binary file matches
+
+codex
+The crash path is in `src/keyspace/mod.rs` around `clear` and `start_ingestion`, with the actual tree implementation coming from the `lsm_tree` crate dependency. I’m reading those APIs and the wrapper fields next to see what local lock or sequencing primitive already exists.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"1,340p\" src/keyspace/mod.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"1,260p\" src/ingestion.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"1,140p\" src/db.rs && sed -n \"700,760p\" src/db.rs && sed -n \"180,220p\" src/recovery.rs'" in /private/tmp
+ succeeded in 728ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+
+pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+}
+
+impl<'a> Ingestion<'a> {
+    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self { keyspace, inner })
+    }
+
+    pub fn write<K: Into<UserKey>, V: Into<UserValue>>(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> crate::Result<()> {
+        self.inner.write(key, value).map_err(Into::into)
+    }
+
+    pub fn write_tombstone<K: Into<UserKey>>(&mut self, key: K) -> crate::Result<()> {
+        self.inner.write_tombstone(key).map_err(Into::into)
+    }
+
+    #[doc(hidden)]
+    pub fn write_weak_tombstone<K: Into<UserKey>>(&mut self, key: K) -> crate::Result<()> {
+        self.inner.write_weak_tombstone(key).map_err(Into::into)
+    }
+
+    pub fn finish(self) -> crate::Result<()> {
+        // NOTE: We hold to avoid a race condition with concurrent writes:
+        //
+        // write         ingest
+        // lock journal
+        // |
+        // next seqno=1
+        // |
+        // --------------finish
+        //                 flush
+        //                 seqno=2
+        //                 register
+        //                 |
+        // -----------------
+        // |
+        // insert seqno=1
+        let _journal_lock = self.keyspace.supervisor.journal.get_writer();
+
+        self.inner
+            .finish()
+            .inspect(|()| {
+                self.keyspace
+                    .worker_messager
+                    .try_send(WorkerMessage::Compact(self.keyspace.clone()))
+                    .ok();
+
+                self.keyspace.supervisor.snapshot_tracker.gc();
+            })
+            .map_err(Into::into)
+    }
+}
+
+ succeeded in 695ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{
+    batch::WriteBatch,
+    db_config::Config,
+    file::{fsync_directory, KEYSPACES_FOLDER, LOCK_FILE, VERSION_MARKER},
+    flush::manager::FlushManager,
+    journal::{manager::JournalManager, writer::PersistMode, Journal},
+    keyspace::{name::is_valid_keyspace_name, KeyspaceKey},
+    locked_file::LockedFileGuard,
+    meta_keyspace::MetaKeyspace,
+    poison_dart::PoisonDart,
+    recovery::{recover_keyspaces, recover_sealed_memtables},
+    snapshot::Snapshot,
+    snapshot_tracker::SnapshotTracker,
+    stats::Stats,
+    supervisor::{Supervisor, SupervisorInner},
+    tx::single_writer::Openable,
+    version::FormatVersion,
+    worker_pool::{WorkerMessage, WorkerPool},
+    write_buffer_manager::WriteBufferManager,
+    HashMap, Keyspace, KeyspaceCreateOptions,
+};
+use lsm_tree::{AbstractTree, SequenceNumberCounter};
+use std::{
+    fs::remove_dir_all,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize},
+        Arc, Mutex, RwLock,
+    },
+};
+
+pub type Keyspaces = HashMap<KeyspaceKey, Keyspace>;
+
+pub struct DatabaseInner {
+    pub(crate) meta_keyspace: MetaKeyspace,
+
+    /// Database configuration
+    #[doc(hidden)]
+    pub config: Config,
+
+    #[doc(hidden)]
+    pub supervisor: Supervisor,
+
+    /// Stop signal when database is dropped to stop background threads
+    pub(crate) stop_signal: lsm_tree::stop_signal::StopSignal,
+
+    /// Counter of background threads
+    pub(crate) active_thread_counter: Arc<AtomicUsize>,
+
+    /// True if fsync failed
+    pub(crate) is_poisoned: Arc<AtomicBool>,
+
+    pub(crate) stats: Arc<Stats>,
+
+    pub(crate) keyspace_id_counter: SequenceNumberCounter,
+
+    pub worker_pool: WorkerPool,
+
+    pub(crate) lock_file: LockedFileGuard,
+}
+
+impl Drop for DatabaseInner {
+    fn drop(&mut self) {
+        log::debug!("Dropping database");
+
+        self.stop_signal.send();
+
+        let _ = self.worker_pool.rx.drain().count();
+
+        while self
+            .active_thread_counter
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+        {
+            let _ = self.worker_pool.sender.send(WorkerMessage::Close);
+            std::thread::sleep(std::time::Duration::from_micros(10));
+        }
+
+        // Drain again after threads are closed
+        let _ = self.worker_pool.rx.drain().count();
+
+        // IMPORTANT: Break cyclic Arcs
+        self.supervisor.flush_manager.clear();
+        self.supervisor
+            .keyspaces
+            .write()
+            .expect("lock is poisoned")
+            .clear();
+        self.supervisor
+            .journal_manager
+            .write()
+            .expect("lock is poisoned")
+            .clear();
+
+        if self.config.clean_path_on_drop {
+            log::info!(
+                "Deleting database because temporary=true: {}",
+                self.config.path.display(),
+            );
+
+            if let Err(err) = remove_dir_all(&self.config.path) {
+                log::warn!(
+                    "Failed to clean up path: {} - {err}",
+                    self.config.path.display()
+                );
+            }
+        }
+
+        #[cfg(feature = "__internal_whitebox")]
+        crate::drop::decrement_drop_counter();
+    }
+}
+
+/// A database is a single logical database
+/// which can house multiple keyspaces
+///
+/// In your application, you should create a single database
+/// and keep it around for as long as needed
+/// (as long as you are using its keyspaces).
+#[derive(Clone)]
+#[doc(alias = "database")]
+#[doc(alias = "collection")]
+pub struct Database(pub(crate) Arc<DatabaseInner>);
+
+impl std::ops::Deref for Database {
+    type Target = DatabaseInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Openable for Database {
+    fn open(config: Config) -> crate::Result<Self>
+    where
+        Self: Sized,
+                    let batch = batch?;
+
+                    for item in batch.items {
+                        let Some(keyspace_name) = db.meta_keyspace.resolve_id(item.keyspace_id)?
+                        else {
+                            continue;
+                        };
+
+                        let Some(keyspace) = keyspaces.get(&keyspace_name) else {
+                            continue;
+                        };
+
+                        let tree = &keyspace.tree;
+
+                        match item.value_type {
+                            lsm_tree::ValueType::Value => {
+                                tree.insert(item.key, item.value, batch.seqno);
+                            }
+                            lsm_tree::ValueType::Tombstone => {
+                                tree.remove(item.key, batch.seqno);
+                            }
+                            lsm_tree::ValueType::WeakTombstone => {
+                                tree.remove_weak(item.key, batch.seqno);
+                            }
+                            lsm_tree::ValueType::Indirection => {
+                                unreachable!()
+                            }
+                        }
+                    }
+
+                    for keyspace_id in &batch.cleared_keyspaces {
+                        let Some(keyspace_name) = db.meta_keyspace.resolve_id(*keyspace_id)? else {
+                            continue;
+                        };
+
+                        let Some(keyspace) = keyspaces.get(&keyspace_name) else {
+                            continue;
+                        };
+
+                        keyspace.tree.clear().ok();
+                    }
+                }
+
+                for keyspace in keyspaces.values() {
+                    let size = keyspace.tree.active_memtable().size();
+
+                    log::trace!(
+                        "Recovered active memtable of size {size}B for keyspace {:?} ({} items)",
+                        keyspace.name,
+                        keyspace.tree.active_memtable().len(),
+                    );
+
+                    // IMPORTANT: Add active memtable size to current write buffer size
+                    db.supervisor.write_buffer_size.allocate(size);
+
+                    // Recover seqno
+                    let maybe_next_seqno = keyspace
+                        .tree
+                        .get_highest_seqno()
+                        .map(|x| x + 1)
+                        .unwrap_or_default();
+                    lsm_tree::ValueType::Indirection => {
+                        unreachable!()
+                    }
+                }
+            }
+
+            for keyspace_id in &batch.cleared_keyspaces {
+                let Some(keyspace_name) = db.meta_keyspace.resolve_id(*keyspace_id)? else {
+                    continue;
+                };
+
+                let Some(handle) = keyspaces_lock.get(&keyspace_name) else {
+                    continue;
+                };
+
+                watermarks
+                    .entry(*keyspace_id)
+                    .and_modify(|prev| {
+                        prev.lsn = prev.lsn.max(batch.seqno);
+                    })
+                    .or_insert_with(|| EvictionWatermark {
+                        keyspace: handle.clone(),
+                        lsn: batch.seqno,
+                    });
+
+                handle.tree.clear().ok();
+            }
+        }
+
+        log::debug!("Sealing recovered memtables");
+        let mut recovered_count = 0;
+
+        for wm in watermarks.values() {
+            let tree = &wm.keyspace.tree;
+
+            let keyspace_lsn = tree.get_highest_persisted_seqno();
+
+            // IMPORTANT: Only apply sealed memtables to keyspaces
+            // that have a lower seqno to avoid double flushing
+            let should_skip_sealed_memtable =
+                keyspace_lsn.is_some_and(|keyspace_lsn| keyspace_lsn >= wm.lsn);
+
+ succeeded in 728ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+mod config;
+pub mod name;
+pub mod options;
+mod write_delay;
+
+#[cfg(test)]
+mod test;
+
+use crate::{
+    file::{KEYSPACES_FOLDER, LSM_CURRENT_VERSION_MARKER},
+    flush::Task as FlushTask,
+    ingestion::Ingestion,
+    locked_file::LockedFileGuard,
+    stats::Stats,
+    supervisor::Supervisor,
+    worker_pool::WorkerMessage,
+    Database, Guard, Iter,
+};
+use lsm_tree::{AbstractTree, AnyTree, SeqNo, UserKey, UserValue};
+use options::CreateOptions;
+use std::{
+    ops::RangeBounds,
+    path::Path,
+    sync::{atomic::AtomicBool, Arc, MutexGuard},
+    time::Duration,
+};
+use write_delay::perform_write_stall;
+
+/// Keyspace key (a.k.a. column family, locality group)
+pub type KeyspaceKey = byteview::StrView;
+
+pub type InternalKeyspaceId = u64;
+
+pub fn apply_to_base_config(
+    config: lsm_tree::Config,
+    our_config: &CreateOptions,
+) -> lsm_tree::Config {
+    config
+        // .level_count(our_config.level_count)
+        .data_block_size_policy(our_config.data_block_size_policy.clone())
+        .data_block_compression_policy(our_config.data_block_compression_policy.clone())
+        .index_block_compression_policy(our_config.index_block_compression_policy.clone())
+        .data_block_restart_interval_policy(our_config.data_block_restart_interval_policy.clone())
+        // .index_block_restart_interval_policy(our_config.index_block_restart_interval_policy.clone())
+        .filter_block_pinning_policy(our_config.filter_block_pinning_policy.clone())
+        .index_block_pinning_policy(our_config.index_block_pinning_policy.clone())
+        .data_block_hash_ratio_policy(our_config.data_block_hash_ratio_policy.clone())
+        .expect_point_read_hits(our_config.expect_point_read_hits)
+        .with_kv_separation(our_config.kv_separation_opts.clone())
+        .index_block_partitioning_policy(our_config.index_block_partitioning_policy.clone())
+        .filter_block_partitioning_policy(our_config.filter_block_partitioning_policy.clone())
+        .filter_policy(our_config.filter_policy.clone())
+        .with_compaction_filter_factory(our_config.compaction_filter_factory.clone())
+}
+
+pub struct KeyspaceInner {
+    /// Internal ID
+    pub(crate) id: InternalKeyspaceId,
+
+    // Internal
+    //
+    /// Keyspace name
+    pub(crate) name: KeyspaceKey,
+
+    // Keyspace configuration
+    #[doc(hidden)]
+    pub config: CreateOptions,
+
+    /// If `true`, the keyspace is marked as deleted
+    pub(crate) is_deleted: AtomicBool,
+
+    /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+    pub(crate) is_poisoned: Arc<AtomicBool>,
+
+    /// LSM-tree wrapper
+    #[doc(hidden)]
+    pub tree: AnyTree,
+
+    pub(crate) supervisor: Supervisor,
+
+    /// Database-level stats
+    pub(crate) stats: Arc<Stats>,
+
+    pub(crate) worker_messager: flume::Sender<WorkerMessage>,
+
+    #[expect(unused)]
+    lock_file: LockedFileGuard,
+}
+
+impl Drop for KeyspaceInner {
+    fn drop(&mut self) {
+        log::trace!("Dropping KeyspaceInner: {:?}", self.name);
+
+        if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
+            let path = &self.tree.tree_config().path;
+
+            // IMPORTANT: First, delete the manifest,
+            // once that is deleted, the keyspace is treated as uninitialized
+            // even if the .deleted marker is removed
+            //
+            // This is important, because if somehow `remove_dir_all` ends up
+            // deleting the `.deleted` marker first, we would end up resurrecting
+            // the keyspace
+            let manifest_file = path.join(LSM_CURRENT_VERSION_MARKER);
+
+            // TODO: use https://github.com/rust-lang/rust/issues/31436 if stable
+            #[expect(clippy::collapsible_else_if)]
+            match manifest_file.try_exists() {
+                Ok(exists) => {
+                    if exists {
+                        if let Err(e) = std::fs::remove_file(manifest_file) {
+                            log::error!(
+                                "Failed to cleanup keyspace manifest at {}: {e}",
+                                path.display(),
+                            );
+                        } else {
+                            if let Err(e) = std::fs::remove_dir_all(path) {
+                                log::error!(
+                                    "Failed to cleanup deleted keyspace's folder at {}: {e}",
+                                    path.display(),
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to cleanup keyspace manifest at {}: {e}",
+                        path.display(),
+                    );
+                }
+            }
+        }
+
+        #[cfg(feature = "__internal_whitebox")]
+        crate::drop::decrement_drop_counter();
+    }
+}
+
+/// Handle to a keyspace
+///
+/// Each keyspace is backed by an LSM-tree to provide a
+/// disk-backed search tree, and can be configured individually.
+///
+/// A keyspace generally only takes a little bit of memory and disk space,
+/// but does not spawn its own background threads.
+///
+/// As long as a handle to a keyspace is held, its folder is not cleaned up from disk
+/// in case it is deleted from another thread.
+#[derive(Clone)]
+#[doc(alias = "column family")]
+#[doc(alias = "locality group")]
+#[doc(alias = "table")]
+pub struct Keyspace(pub(crate) Arc<KeyspaceInner>);
+
+impl AsRef<Keyspace> for &Keyspace {
+    fn as_ref(&self) -> &Keyspace {
+        self
+    }
+}
+
+impl std::ops::Deref for Keyspace {
+    type Target = KeyspaceInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialEq for Keyspace {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Keyspace {}
+
+impl std::hash::Hash for Keyspace {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write(self.name.as_bytes());
+    }
+}
+
+impl Keyspace {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn id(&self) -> InternalKeyspaceId {
+        self.id
+    }
+
+    /// Returns the keyspace's name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!("default", &**tree.name());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    pub fn name(&self) -> &KeyspaceKey {
+        &self.name
+    }
+
+    /// Clears the entire keyspace in O(1) time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "a")?;
+    /// assert!(tree.contains_key("a")?);
+    ///
+    /// tree.clear()?;
+    /// assert!(!tree.contains_key("a")?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_clear(self.id, seqno)?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        self.tree.clear()?;
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        Ok(())
+    }
+
+    /// Returns the number of blob bytes on disk that are not referenced.
+    ///
+    /// These will be reclaimed over time by blob garbage collection automatically.
+    #[must_use]
+    pub fn fragmented_blob_bytes(&self) -> u64 {
+        self.tree.stale_blob_bytes()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn sealed_memtable_count(&self) -> usize {
+        self.tree.sealed_memtable_count()
+    }
+
+    /// Prepare ingestiom of a pre-sorted stream of key-value pairs into the keyspace.
+    ///
+    /// Prefer this method over singular inserts or write batches/transactions
+    /// for maximum bulk load speed.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input iterator is not sorted in ascending order.
+    pub fn start_ingestion(&self) -> crate::Result<Ingestion<'_>> {
+        Ingestion::new(self)
+    }
+
+    pub(crate) fn from_database(
+        keyspace_id: InternalKeyspaceId,
+        db: &Database,
+        tree: AnyTree,
+        name: KeyspaceKey,
+        config: CreateOptions,
+    ) -> Self {
+        Self(Arc::new(KeyspaceInner {
+            id: keyspace_id,
+            name,
+            tree,
+            config,
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            lock_file: db.lock_file.clone(),
+            stats: db.stats.clone(),
+        }))
+    }
+
+    /// Creates a new keyspace.
+    pub(crate) fn create_new(
+        keyspace_id: InternalKeyspaceId,
+        db: &Database,
+        name: KeyspaceKey,
+        config: CreateOptions,
+    ) -> crate::Result<Self> {
+        log::debug!("Creating keyspace {name:?}->{keyspace_id}");
+
+        let base_folder = db
+            .config
+            .path
+            .join(KEYSPACES_FOLDER)
+            .join(keyspace_id.to_string());
+
+        std::fs::create_dir_all(&base_folder)?;
+
+        let base_config = lsm_tree::Config::new(
+            base_folder,
+            db.supervisor.seqno.clone(),
+            db.supervisor.snapshot_tracker.get_ref(),
+
+codex
+`finish()` already serializes against ordinary writes by taking the journal writer, but `clear()` releases journal ordering only after it has called the tree clear. The race looks like `Ingestion::new()` can prepare state while `clear()` mutates version state, so I’m checking whether a keyspace-local operation mutex is available or should be added.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"760,1130p\" src/keyspace/mod.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"340,760p\" src/keyspace/mod.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'find ~/.cargo/registry/src -path \"*lsm-tree*\" -type f -name \"*.rs\" 2>/dev/null | head -80'" in /private/tmp
+ succeeded in 701ms:
+            for keyspace in self
+                .supervisor
+                .keyspaces
+                .read()
+                .expect("lock is poisoned")
+                .values()
+            {
+                if let Err(e) = keyspace.tree.get_version_history_lock().maintenance(
+                    keyspace.path(),
+                    self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+                ) {
+                    log::warn!(
+                        "Version history GC failed for keyspace {:?}: {e:?}",
+                        keyspace.name,
+                    );
+                }
+            }
+        }
+
+        #[expect(clippy::expect_used)]
+        self.supervisor
+            .journal_manager
+            .write()
+            .expect("lock is poisoned")
+            .maintenance()?;
+
+        Ok(true)
+    }
+
+    fn check_write_halt(&self) {
+        while self.tree.l0_run_count() >= 30 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub(crate) fn local_backpressure(&self) -> bool {
+        let mut throttled = false;
+
+        let l0_run_count = self.tree.l0_run_count();
+
+        if l0_run_count >= 20 {
+            perform_write_stall(l0_run_count);
+            self.check_write_halt();
+            throttled = true;
+        }
+
+        while self.tree.sealed_memtable_count() >= 4 {
+            log::debug!(
+                "Halting writes because we have 4+ sealed memtables in {:?} queued up",
+                self.name,
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            throttled = true;
+        }
+
+        throttled
+    }
+
+    pub(crate) fn request_rotation(&self) {
+        let lock = self.tree.get_version_history_lock();
+        let latest_version = lock.latest_version();
+        let active_memtable = &latest_version.active_memtable;
+
+        self.worker_messager
+            .try_send(WorkerMessage::RotateMemtable(
+                self.clone(),
+                active_memtable.id(),
+            ))
+            .ok();
+    }
+
+    pub(crate) fn check_memtable_rotate(&self, size: u64) {
+        if size > self.config.max_memtable_size {
+            self.request_rotation();
+        }
+    }
+
+    fn maintenance(&self, memtable_size: u64) {
+        self.check_memtable_rotate(memtable_size);
+        self.local_backpressure();
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn l0_table_count(&self) -> usize {
+        self.tree.level_table_count(0).unwrap_or_default()
+    }
+
+    /// Number of tables (a.k.a. SST files) in the LSM-tree.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn table_count(&self) -> usize {
+        self.tree.table_count()
+    }
+
+    /// Number of blob files in the LSM-tree.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn blob_file_count(&self) -> usize {
+        self.tree.blob_file_count()
+    }
+
+    /// Performs major compaction, blocking the caller until it's done.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    #[doc(hidden)]
+    pub fn major_compact(&self) -> crate::Result<()> {
+        self.tree.major_compact(
+            64_000_000,
+            self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+        )?;
+
+        // TODO: 3.0.0 ----^
+        // compaction strategy needs a method: strategy.table_target_size()
+
+        Ok(())
+    }
+
+    /// Inserts a key-value pair into the keyspace.
+    ///
+    /// Keys may be up to 65536 bytes long, values up to 2^32 bytes.
+    /// Shorter keys and values result in better performance.
+    ///
+    /// If the key already exists, the item will be overwritten.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    ///
+    /// assert!(!tree.is_empty()?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn insert<K: Into<UserKey>, V: Into<UserValue>>(
+        &self,
+        key: K,
+        value: V,
+    ) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        if self.is_deleted.load(Ordering::Relaxed) {
+            return Err(crate::Error::KeyspaceDeleted);
+        }
+
+        let key = key.into();
+        let value = value.into();
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_raw(self.id, &key, &value, lsm_tree::ValueType::Value, seqno)?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        let (item_size, memtable_size) = self.tree.insert(key, value, seqno);
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        self.supervisor.write_buffer_size.allocate(item_size);
+        self.maintenance(memtable_size);
+
+        Ok(())
+    }
+
+    /// Removes an item from the keyspace.
+    ///
+    /// The key may be up to 65536 bytes long.
+    /// Shorter keys result in better performance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    ///
+    /// let item = tree.get("a")?.expect("should have item");
+    /// assert_eq!("abc".as_bytes(), &*item);
+    ///
+    /// tree.remove("a")?;
+    ///
+    /// let item = tree.get("a")?;
+    /// assert_eq!(None, item);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn remove<K: Into<UserKey>>(&self, key: K) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        if self.is_deleted.load(Ordering::Relaxed) {
+            return Err(crate::Error::KeyspaceDeleted);
+        }
+
+        let key = key.into();
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_raw(self.id, &key, &[], lsm_tree::ValueType::Tombstone, seqno)?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        let (item_size, memtable_size) = self.tree.remove(key, seqno);
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        self.supervisor.write_buffer_size.allocate(item_size);
+        self.maintenance(memtable_size);
+
+        Ok(())
+    }
+
+    /// Removes an item from the keyspace, leaving behind a weak tombstone.
+    ///
+    /// When a weak tombstone is matched with a single write in a compaction,
+    /// the tombstone will be removed along with the value. If the key was
+    /// overwritten the result of a `remove_weak` is undefined.
+    ///
+    /// Only use this remove if it is known that the key has only been written
+    /// to once since its creation or last `remove_weak`.
+    ///
+    /// The key may be up to 65536 bytes long.
+    /// Shorter keys result in better performance.
+    ///
+    /// # Experimental
+    ///
+    /// This function is currently experimental.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    ///
+    /// let item = tree.get("a")?.expect("should have item");
+    /// assert_eq!("abc".as_bytes(), &*item);
+    ///
+    /// tree.remove_weak("a")?;
+    ///
+    /// let item = tree.get("a")?;
+    /// assert_eq!(None, item);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    #[doc(hidden)]
+    pub fn remove_weak<K: Into<UserKey>>(&self, key: K) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        if self.is_deleted.load(Ordering::Relaxed) {
+            return Err(crate::Error::KeyspaceDeleted);
+        }
+
+        let key = key.into();
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_raw(
+            self.id,
+            &key,
+            &[],
+            lsm_tree::ValueType::WeakTombstone,
+            seqno,
+        )?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!(
+                        "persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}"
+                    );
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        let (item_size, memtable_size) = self.tree.remove(key, seqno);
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        self.supervisor.write_buffer_size.allocate(item_size);
+        self.maintenance(memtable_size);
+
+        Ok(())
+    }
+}
+
+ succeeded in 719ms:
+            db.supervisor.snapshot_tracker.get_ref(),
+        )
+        .use_descriptor_table(db.config.descriptor_table.clone())
+        .use_cache(db.config.cache.clone());
+
+        let base_config = apply_to_base_config(base_config, &config);
+        let tree = base_config.open()?;
+
+        Ok(Self(Arc::new(KeyspaceInner {
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            id: keyspace_id,
+            name,
+            config,
+            tree,
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            stats: db.stats.clone(),
+            lock_file: db.lock_file.clone(),
+        })))
+    }
+
+    /// Returns the metrics struct of the underlying LSM-tree.
+    ///
+    /// # Note
+    ///
+    /// This function is experimental and metric names may change in future releases.
+    #[cfg(feature = "metrics")]
+    #[doc(hidden)]
+    pub fn metrics(&self) -> &lsm_tree::Metrics {
+        &**self.tree.metrics()
+    }
+
+    /// Returns the underlying LSM-tree's path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.tree.tree_config().path.as_path()
+    }
+
+    /// Returns the disk space usage of this keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!(0, tree.disk_space());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    pub fn disk_space(&self) -> u64 {
+        self.tree.disk_space()
+    }
+
+    /// Returns an iterator that scans through the entire keyspace.
+    ///
+    /// Avoid using this function, or limit it as otherwise it may scan a lot of items.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    /// tree.insert("f", "abc")?;
+    /// tree.insert("g", "abc")?;
+    /// assert_eq!(3, tree.iter().count());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    #[expect(clippy::iter_without_into_iter)]
+    pub fn iter(&self) -> Iter {
+        let nonce = self.supervisor.snapshot_tracker.open();
+        let iter = self.tree.iter(nonce.instant, None);
+        crate::iter::Iter::new(nonce, iter)
+    }
+
+    /// Returns an iterator over a range of items.
+    ///
+    /// Avoid using full or unbounded ranges as they may scan a lot of items (unless limited).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    /// tree.insert("f", "abc")?;
+    /// tree.insert("g", "abc")?;
+    /// assert_eq!(2, tree.range("a"..="f").count());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn range<K: AsRef<[u8]>, R: RangeBounds<K>>(&self, range: R) -> Iter {
+        let nonce = self.supervisor.snapshot_tracker.open();
+        let iter = self.tree.range(range, SeqNo::MAX, None);
+        crate::iter::Iter::new(nonce, iter)
+    }
+
+    /// Returns an iterator over a prefixed set of items.
+    ///
+    /// Avoid using an empty prefix as it may scan a lot of items (unless limited).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    /// tree.insert("ab", "abc")?;
+    /// tree.insert("abc", "abc")?;
+    /// assert_eq!(2, tree.prefix("ab").count());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn prefix<K: AsRef<[u8]>>(&self, prefix: K) -> Iter {
+        let nonce = self.supervisor.snapshot_tracker.open();
+        let iter = self.tree.prefix(prefix, SeqNo::MAX, None);
+        crate::iter::Iter::new(nonce, iter)
+    }
+
+    /// Approximates the number of items in the keyspace.
+    ///
+    /// For update- or delete-heavy workloads, this value will
+    /// diverge from the real value, but is a O(1) operation.
+    ///
+    /// For insert-only workloads (e.g. logs, time series)
+    /// this value is reliable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!(tree.approximate_len(), 0);
+    ///
+    /// tree.insert("1", "abc")?;
+    /// assert_eq!(tree.approximate_len(), 1);
+    ///
+    /// tree.remove("1")?;
+    /// // Oops! approximate_len will not be reliable here
+    /// assert_eq!(tree.approximate_len(), 2);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    pub fn approximate_len(&self) -> usize {
+        self.tree.approximate_len()
+    }
+
+    /// Scans the entire keyspace, returning the number of items.
+    ///
+    /// # Caution
+    ///
+    /// This operation scans the entire keyspace: O(n) complexity!
+    ///
+    /// Never, under any circumstances, use .`len()` == 0 to check
+    /// if the keyspace is empty, use [`Keyspace::is_empty`] instead.
+    ///
+    /// If you want an estimate, use [`Keyspace::approximate_len`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!(tree.len()?, 0);
+    ///
+    /// tree.insert("1", "abc")?;
+    /// tree.insert("3", "abc")?;
+    /// tree.insert("5", "abc")?;
+    /// assert_eq!(tree.len()?, 3);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn len(&self) -> crate::Result<usize> {
+        let mut count = 0;
+
+        for guard in self.iter() {
+            let _ = guard.key()?;
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    /// Returns `true` if the keyspace is empty.
+    ///
+    /// This operation has O(log N) complexity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert!(tree.is_empty()?);
+    ///
+    /// tree.insert("a", "abc")?;
+    /// assert!(!tree.is_empty()?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn is_empty(&self) -> crate::Result<bool> {
+        self.tree.is_empty(SeqNo::MAX, None).map_err(Into::into)
+    }
+
+    /// Returns `true` if the keyspace contains the specified key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert!(!tree.contains_key("a")?);
+    ///
+    /// tree.insert("a", "abc")?;
+    /// assert!(tree.contains_key("a")?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn contains_key<K: AsRef<[u8]>>(&self, key: K) -> crate::Result<bool> {
+        self.tree.contains_key(key, SeqNo::MAX).map_err(Into::into)
+    }
+
+    /// Retrieves an item from the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "my_value")?;
+    ///
+    /// let item = tree.get("a")?;
+    /// assert_eq!(Some("my_value".as_bytes().into()), item);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn get<K: AsRef<[u8]>>(&self, key: K) -> crate::Result<Option<lsm_tree::UserValue>> {
+        Ok(self.tree.get(key, SeqNo::MAX)?)
+    }
+
+    /// Retrieves the size of an item from the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "my_value")?;
+    ///
+    /// let len = tree.size_of("a")?.unwrap_or_default();
+    /// assert_eq!("my_value".len() as u32, len);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn size_of<K: AsRef<[u8]>>(&self, key: K) -> crate::Result<Option<u32>> {
+        Ok(self.tree.size_of(key, SeqNo::MAX)?)
+    }
+
+    /// Returns the first key-value pair in the keyspace.
+    /// The key in this pair is the minimum key in the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("1", "abc")?;
+    /// tree.insert("3", "abc")?;
+    /// tree.insert("5", "abc")?;
+    ///
+    /// let key = tree.first_key_value().expect("item should exist").key()?;
+    /// assert_eq!(&*key, "1".as_bytes());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn first_key_value(&self) -> Option<Guard> {
+        self.tree.first_key_value(SeqNo::MAX, None).map(Guard)
+    }
+
+    /// Returns the last key-value pair in the keyspace.
+    /// The key in this pair is the maximum key in the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("1", "abc")?;
+    /// tree.insert("3", "abc")?;
+    /// tree.insert("5", "abc")?;
+    ///
+    /// let key = tree.last_key_value().expect("item should exist").key()?;
+    /// assert_eq!(&*key, "5".as_bytes());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn last_key_value(&self) -> Option<Guard> {
+        self.tree.last_key_value(SeqNo::MAX, None).map(Guard)
+    }
+
+    /// Returns `true` if the underlying LSM-tree is key-value-separated.
+    #[must_use]
+    pub fn is_kv_separated(&self) -> bool {
+        matches!(self.tree, crate::AnyTree::Blob(_))
+    }
+
+    // NOTE: Used in tests
+    #[doc(hidden)]
+    pub fn rotate_memtable_and_wait(&self) -> crate::Result<()> {
+        if self.rotate_memtable()? {
+            self.supervisor.flush_manager.wait_for_empty();
+
+            while self.tree.sealed_memtable_count() > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn rotate_memtable(&self) -> crate::Result<bool> {
+        log::trace!("acquiring journal lock");
+        let journal_writer = self.supervisor.journal.get_writer();
+        let active_memtable_id = self.tree.active_memtable().id();
+        self.inner_rotate_memtable(journal_writer, active_memtable_id)
+    }
+
+    pub(crate) fn inner_rotate_memtable(
+        &self,
+        journal_writer: MutexGuard<'_, crate::journal::writer::Writer>,
+        memtable_id: lsm_tree::MemtableId,
+    ) -> crate::Result<bool> {
+        log::debug!("Rotating keyspace {:?}", self.name);
+
+        if self.tree.active_memtable().id() != memtable_id {
+            return Ok(false);
+        }
+
+        // Rotate memtable
+        let Some(_) = self.tree.rotate_memtable() else {
+            log::debug!("Got no sealed memtable, someone beat us to it");
+            return Ok(false);
+        };
+
+        drop(journal_writer);
+
+        self.supervisor.flush_manager.enqueue(Arc::new(FlushTask {
+            keyspace: self.clone(),
+        }));
+
+        self.worker_messager.send(WorkerMessage::Flush).ok();
+
+        {
+            // NOTE: If the difference between watermark is too large, and
+            // we never opened a snapshot, we need to pull the watermark up
+            //
+            // https://github.com/fjall-rs/fjall/discussions/85
+            self.supervisor.snapshot_tracker.pullup();
+            self.supervisor.snapshot_tracker.gc();
+
+            for keyspace in self
+
+ succeeded in 685ms:
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/abstract_tree.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/any_tree.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/gc.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/handle.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/ingest.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/cache.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/checksum.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/coding.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/drop_range.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/fifo.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/filter.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/flavour.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/leveled/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/leveled/test.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/maintenance.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/major.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/movedown.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/pulldown.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/state/hidden_set.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/state/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/stream.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/tiered.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compression.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/config/block_size.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/config/compression.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/config/filter.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/config/hash_ratio.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/config/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/config/pinning.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/config/restart_interval.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/descriptor_table.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/double_ended_peekable.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/error.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/file.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/file_accessor.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/format_version.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/hash.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/ingestion.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/iter_guard.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/key.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/key_range.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/lib.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/manifest.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/memtable/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/merge.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/metrics.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/mvcc_stream.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/path.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/range.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/run_reader.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/run_scanner.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/seqno.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/slice/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/slice/slice_bytes/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/slice/slice_default/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/slice_windows.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/stop_signal.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/binary_index/builder.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/binary_index/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/binary_index/reader.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/decoder.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/encoder.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/hash_index/builder.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/hash_index/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/hash_index/reader.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/header.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/offset.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/trailer.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block/type.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block_index/full.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block_index/iter.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block_index/mod.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block_index/two_level.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/block_index/volatile.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/data_block/iter.rs
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/table/data_block/iter_test.rs
+
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'grep -R -n \"fn clear\\|pub fn clear\\|fn ingestion\\|pub fn ingestion\\|invalid table IDs\" /home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src | head -100'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"1,260p\" /home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/ingestion.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"1,220p\" /home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/abstract_tree.rs'" in /private/tmp
+ succeeded in 724ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{
+    blob_tree::ingest::BlobIngestion, tree::ingest::Ingestion, AnyTree, UserKey, UserValue,
+};
+
+/// Unified ingestion builder over `AnyTree`
+// Keep zero allocations and direct dispatch; boxing introduces heap indirection and `dyn` adds virtual dispatch.
+// Ingestion calls use `&mut self` in tight loops; the active variant is stable and branch prediction makes the match cheap.
+// Allowing this lint preserves hot-path performance at the cost of a larger enum size.
+#[expect(clippy::large_enum_variant)]
+pub enum AnyIngestion<'a> {
+    /// Ingestion for a standard LSM-tree
+    Standard(Ingestion<'a>),
+
+    /// Ingestion for a [`BlobTree`] with KV separation
+    Blob(BlobIngestion<'a>),
+}
+
+impl AnyIngestion<'_> {
+    /// Writes a key-value pair.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn write<K: Into<UserKey>, V: Into<UserValue>>(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> crate::Result<()> {
+        match self {
+            Self::Standard(i) => i.write(key.into(), value.into()),
+            Self::Blob(b) => b.write(key.into(), value.into()),
+        }
+    }
+
+    /// Writes a tombstone for a key.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn write_tombstone<K: Into<UserKey>>(&mut self, key: K) -> crate::Result<()> {
+        match self {
+            Self::Standard(i) => i.write_tombstone(key.into()),
+            Self::Blob(b) => b.write_tombstone(key.into()),
+        }
+    }
+
+    /// Writes a weak tombstone for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use lsm_tree::Config;
+    /// # let folder = tempfile::tempdir()?;
+    /// # let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    /// #
+    /// let mut ingestion = tree.ingestion()?;
+    /// ingestion.write("a", "abc")?;
+    /// ingestion.write_weak_tombstone("b")?;
+    /// ingestion.finish()?;
+    /// #
+    /// # Ok::<(), lsm_tree::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn write_weak_tombstone<K: Into<UserKey>>(&mut self, key: K) -> crate::Result<()> {
+        match self {
+            Self::Standard(i) => i.write_weak_tombstone(key.into()),
+            Self::Blob(b) => b.write_weak_tombstone(key.into()),
+        }
+    }
+
+    /// Finalizes ingestion and registers created tables (and blob files if present).
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn finish(self) -> crate::Result<()> {
+        match self {
+            Self::Standard(i) => i.finish(),
+            Self::Blob(b) => b.finish(),
+        }
+    }
+}
+
+impl AnyTree {
+    /// Starts an ingestion for any tree type (standard or blob).
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn ingestion(&self) -> crate::Result<AnyIngestion<'_>> {
+        match self {
+            Self::Standard(t) => Ok(AnyIngestion::Standard(Ingestion::new(t)?)),
+            Self::Blob(b) => Ok(AnyIngestion::Blob(BlobIngestion::new(b)?)),
+        }
+    }
+}
+
+ succeeded in 727ms:
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/abstract_tree.rs:176:    fn clear(&self) -> crate::Result<()>;
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/abstract_tree.rs:240:    fn clear_active_memtable(&self);
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/mod.rs:272:    fn clear(&self) -> crate::Result<()> {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/mod.rs:295:    fn clear_active_memtable(&self) {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/ingestion.rs:97:    pub fn ingestion(&self) -> crate::Result<AnyIngestion<'_>> {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:264:    fn clear(&self) -> crate::Result<()> {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:482:    fn clear_active_memtable(&self) {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/version/mod.rs:572:        assert_eq!(affected_tables.len(), ids.len(), "invalid table IDs");
+
+ succeeded in 679ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{
+    iter_guard::IterGuardImpl, table::Table, version::Version, vlog::BlobFile, AnyTree, BlobTree,
+    Config, Guard, InternalValue, KvPair, Memtable, SeqNo, TableId, Tree, UserKey, UserValue,
+};
+use std::{
+    ops::RangeBounds,
+    sync::{Arc, MutexGuard, RwLockWriteGuard},
+};
+
+pub type RangeItem = crate::Result<KvPair>;
+
+type FlushToTablesResult = (Vec<Table>, Option<Vec<BlobFile>>);
+
+/// Generic Tree API
+#[enum_dispatch::enum_dispatch]
+pub trait AbstractTree {
+    /// Debug method for tracing the MVCC history of a key.
+    #[doc(hidden)]
+    fn print_trace(&self, key: &[u8]) -> crate::Result<()>;
+
+    /// Returns the number of cached table file descriptors.
+    fn table_file_cache_size(&self) -> usize;
+
+    // TODO: remove
+    #[doc(hidden)]
+    fn version_memtable_size_sum(&self) -> u64 {
+        self.get_version_history_lock().memtable_size_sum()
+    }
+
+    #[doc(hidden)]
+    fn next_table_id(&self) -> TableId;
+
+    #[doc(hidden)]
+    fn id(&self) -> crate::TreeId;
+
+    /// Like [`AbstractTree::get`], but returns the actual internal entry, not just the user value.
+    ///
+    /// Used in tests.
+    #[doc(hidden)]
+    fn get_internal_entry(&self, key: &[u8], seqno: SeqNo) -> crate::Result<Option<InternalValue>>;
+
+    #[doc(hidden)]
+    fn current_version(&self) -> Version;
+
+    #[doc(hidden)]
+    fn get_version_history_lock(&self) -> RwLockWriteGuard<'_, crate::version::SuperVersions>;
+
+    /// Seals the active memtable and flushes to table(s).
+    ///
+    /// If there are already other sealed memtables lined up, those will be flushed as well.
+    ///
+    /// Only used in tests.
+    #[doc(hidden)]
+    fn flush_active_memtable(&self, eviction_seqno: SeqNo) -> crate::Result<()> {
+        let lock = self.get_flush_lock();
+        self.rotate_memtable();
+        self.flush(&lock, eviction_seqno)?;
+        Ok(())
+    }
+
+    /// Synchronously flushes pending sealed memtables to tables.
+    ///
+    /// Returns the sum of flushed memtable sizes that were flushed.
+    ///
+    /// The function may not return a result, if nothing was flushed.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    fn flush(
+        &self,
+        _lock: &MutexGuard<'_, ()>,
+        seqno_threshold: SeqNo,
+    ) -> crate::Result<Option<u64>> {
+        use crate::{compaction::stream::CompactionStream, merge::Merger};
+
+        let version_history = self.get_version_history_lock();
+        let latest = version_history.latest_version();
+
+        if latest.sealed_memtables.len() == 0 {
+            return Ok(None);
+        }
+
+        let sealed_ids = latest
+            .sealed_memtables
+            .iter()
+            .map(|mt| mt.id)
+            .collect::<Vec<_>>();
+
+        let flushed_size = latest.sealed_memtables.iter().map(|mt| mt.size()).sum();
+
+        let merger = Merger::new(
+            latest
+                .sealed_memtables
+                .iter()
+                .map(|mt| mt.iter().map(Ok))
+                .collect::<Vec<_>>(),
+        );
+        let stream = CompactionStream::new(merger, seqno_threshold);
+
+        drop(version_history);
+
+        if let Some((tables, blob_files)) = self.flush_to_tables(stream)? {
+            self.register_tables(
+                &tables,
+                blob_files.as_deref(),
+                None,
+                &sealed_ids,
+                seqno_threshold,
+            )?;
+        }
+
+        Ok(Some(flushed_size))
+    }
+
+    /// Returns an iterator that scans through the entire tree.
+    ///
+    /// Avoid using this function, or limit it as otherwise it may scan a lot of items.
+    fn iter(
+        &self,
+        seqno: SeqNo,
+        index: Option<(Arc<Memtable>, SeqNo)>,
+    ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static> {
+        self.range::<&[u8], _>(.., seqno, index)
+    }
+
+    /// Returns an iterator over a prefixed set of items.
+    ///
+    /// Avoid using an empty prefix as it may scan a lot of items (unless limited).
+    fn prefix<K: AsRef<[u8]>>(
+        &self,
+        prefix: K,
+        seqno: SeqNo,
+        index: Option<(Arc<Memtable>, SeqNo)>,
+    ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static>;
+
+    /// Returns an iterator over a range of items.
+    ///
+    /// Avoid using full or unbounded ranges as they may scan a lot of items (unless limited).
+    fn range<K: AsRef<[u8]>, R: RangeBounds<K>>(
+        &self,
+        range: R,
+        seqno: SeqNo,
+        index: Option<(Arc<Memtable>, SeqNo)>,
+    ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static>;
+
+    /// Returns the approximate number of tombstones in the tree.
+    fn tombstone_count(&self) -> u64;
+
+    /// Returns the approximate number of weak tombstones (single deletes) in the tree.
+    fn weak_tombstone_count(&self) -> u64;
+
+    /// Returns the approximate number of values reclaimable once weak tombstones can be GC'd.
+    fn weak_tombstone_reclaimable_count(&self) -> u64;
+
+    /// Drops tables that are fully contained in a given range.
+    ///
+    /// Accepts any `RangeBounds`, including unbounded or exclusive endpoints.
+    /// If the normalized lower bound is greater than the upper bound, the
+    /// method returns without performing any work.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` only if an IO error occurs.
+    fn drop_range<K: AsRef<[u8]>, R: RangeBounds<K>>(&self, range: R) -> crate::Result<()>;
+
+    /// Drops all tables and clears all memtables atomically.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` only if an IO error occurs.
+    fn clear(&self) -> crate::Result<()>;
+
+    /// Performs major compaction, blocking the caller until it's done.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    fn major_compact(&self, target_size: u64, seqno_threshold: SeqNo) -> crate::Result<()>;
+
+    /// Returns the disk space used by stale blobs.
+    fn stale_blob_bytes(&self) -> u64 {
+        0
+    }
+
+    /// Gets the disk space usage of all filters in the tree.
+    ///
+    /// May not correspond to the actual memory size because filter blocks may be paged out.
+    fn filter_size(&self) -> u64;
+
+    /// Gets the memory usage of all pinned filters in the tree.
+    fn pinned_filter_size(&self) -> usize;
+
+    /// Gets the memory usage of all pinned index blocks in the tree.
+    fn pinned_block_index_size(&self) -> usize;
+
+    /// Gets the length of the version free list.
+    fn version_free_list_len(&self) -> usize;
+
+    /// Returns the metrics structure.
+    #[cfg(feature = "metrics")]
+    fn metrics(&self) -> &Arc<crate::Metrics>;
+
+    /// Acquires the flush lock which is required to call [`Tree::flush`].
+    fn get_flush_lock(&self) -> MutexGuard<'_, ()>;
+
+    /// Synchronously flushes a memtable to a table.
+    ///
+    /// This method will not make the table immediately available,
+    /// use [`AbstractTree::register_tables`] for that.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    #[warn(clippy::type_complexity)]
+    fn flush_to_tables(
+
+codex
+The dependency’s ingestion object keeps tree references across `write()` calls and only registers tables at `finish()`. To prevent a clear from deleting or rewriting version state under an in-flight ingestion, I’m going to add a keyspace-level mutex that covers `start_ingestion` through `finish`, and take that same mutex around `clear()`.
+codex
+I’m making a small source-only change: a mutex on `KeyspaceInner`, initialized with each keyspace, and an ingestion guard field so the lock is held for the full ingestion lifetime. This keeps ordinary point writes concurrent while serializing the two structural operations involved in the bug.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"1,180p\" src/error.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'grep -R -n \"expect(\\\"lock is poisoned\\\"\\|Poisoned\" src | head -80'" in /private/tmp
+ succeeded in 884ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{
+    journal::error::RecoveryError as JournalRecoveryError, version::FormatVersion, CompressionType,
+};
+
+/// Errors that may occur in the storage engine
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// Error inside LSM-tree
+    Storage(lsm_tree::Error),
+
+    /// I/O error
+    Io(std::io::Error),
+
+    /// Error during journal recovery
+    JournalRecovery(JournalRecoveryError),
+
+    /// Invalid or unparsable data format version
+    InvalidVersion(Option<FormatVersion>),
+
+    /// Decompression failed
+    Decompress(CompressionType),
+
+    /// Invalid journal trailer detected
+    InvalidTrailer,
+
+    /// Invalid tag detected during decoding
+    InvalidTag((&'static str, u8)),
+
+    /// A previous flush / commit operation failed, indicating a hardware-related failure
+    ///
+    /// Future writes will not be accepted as consistency cannot be guaranteed.
+    ///
+    /// **At this point, it's best to let the application crash and try to recover.**
+    ///
+    /// More info: <https://www.usenix.org/system/files/atc20-rebello.pdf>
+    Poisoned,
+
+    /// Keyspace is deleted
+    KeyspaceDeleted,
+
+    /// Database is locked.
+    Locked,
+
+    /// Database is unrecoverable, see logs for details
+    Unrecoverable,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FjallError: {self:?}")
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(inner: std::io::Error) -> Self {
+        Self::Io(inner)
+    }
+}
+
+impl From<lsm_tree::Error> for Error {
+    fn from(inner: lsm_tree::Error) -> Self {
+        Self::Storage(inner)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(inner) => Some(inner),
+            Self::Io(inner) => Some(inner),
+            Self::JournalRecovery(inner) => Some(inner),
+            _ => None,
+        }
+    }
+}
+
+/// Result helper type
+pub type Result<T> = std::result::Result<T, Error>;
+
+ succeeded in 883ms:
+src/batch/mod.rs:112:            return Err(crate::Error::Poisoned);
+src/batch/mod.rs:127:                return Err(crate::Error::Poisoned);
+src/batch/mod.rs:141:            .expect("lock is poisoned");
+src/db.rs:91:            .expect("lock is poisoned")
+src/db.rs:96:            .expect("lock is poisoned")
+src/db.rs:284:            .expect("lock is poisoned")
+src/db.rs:296:                .expect("lock is poisoned")
+src/db.rs:321:            .expect("lock is poisoned")
+src/db.rs:355:            return Err(crate::Error::Poisoned);
+src/db.rs:366:            return Err(crate::Error::Poisoned);
+src/db.rs:458:        let keyspaces = self.supervisor.keyspaces.write().expect("lock is poisoned");
+src/db.rs:497:            .expect("lock is poisoned")
+src/db.rs:507:            .expect("lock is poisoned")
+src/db.rs:681:            let keyspaces = db.supervisor.keyspaces.read().expect("lock is poisoned");
+src/db.rs:778:            .expect("lock is poisoned")
+src/error.rs:41:    Poisoned,
+src/journal/mod.rs:59:            let mut writer = self.writer.lock().expect("lock is poisoned");
+src/journal/mod.rs:100:        self.writer.lock().expect("lock is poisoned")
+src/keyspace/mod.rs:76:    /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+src/keyspace/mod.rs:243:            return Err(crate::Error::Poisoned);
+src/keyspace/mod.rs:764:                .expect("lock is poisoned")
+src/keyspace/mod.rs:783:            .expect("lock is poisoned")
+src/keyspace/mod.rs:923:            return Err(crate::Error::Poisoned);
+src/keyspace/mod.rs:994:            return Err(crate::Error::Poisoned);
+src/keyspace/mod.rs:1077:            return Err(crate::Error::Poisoned);
+src/meta_keyspace.rs:129:        let mut lock = self.keyspaces.write().expect("lock is poisoned");
+src/meta_keyspace.rs:198:            .expect("lock is poisoned")
+src/recovery.rs:26:    let mut keyspaces_lock = db.supervisor.keyspaces.write().expect("lock is poisoned");
+src/recovery.rs:129:        .expect("lock is poisoned");
+src/recovery.rs:132:    let keyspaces_lock = db.supervisor.keyspaces.read().expect("lock is poisoned");
+src/snapshot_tracker.rs:74:        let _lock = self.gc_lock.read().expect("lock is poisoned");
+src/snapshot_tracker.rs:90:        let _lock = self.gc_lock.read().expect("lock is poisoned");
+src/snapshot_tracker.rs:108:        let lock = self.gc_lock.read().expect("lock is poisoned");
+src/snapshot_tracker.rs:138:        let _lock = self.gc_lock.write().expect("lock is poisoned");
+src/snapshot_tracker.rs:150:        let _lock = self.gc_lock.write().expect("lock is poisoned");
+src/tx/optimistic/conflict_manager.rs:33:        let mut lock = self.reads.lock().expect("lock is poisoned");
+src/tx/optimistic/conflict_manager.rs:48:        let mut lock = self.conflict_keys.lock().expect("lock is poisoned");
+src/tx/optimistic/conflict_manager.rs:82:        let reads_lock = self.reads.lock().expect("lock is poisoned");
+src/tx/optimistic/conflict_manager.rs:85:        let conflict_keys_lock = other.conflict_keys.lock().expect("lock is poisoned");
+src/tx/optimistic/oracle.rs:32:            .map_err(|_| crate::Error::Poisoned)?;
+src/tx/optimistic/oracle.rs:71:            .map_err(|_| crate::Error::Poisoned)
+src/worker_pool.rs:115:        *self.thread_handles.lock().expect("lock is poisoned") = thread_handles;
+src/worker_pool.rs:161:                        .expect("lock is poisoned");
+src/worker_pool.rs:165:                        let keyspaces = ctx.supervisor.keyspaces.write().expect("lock is poisoned");
+src/worker_pool.rs:216:                .expect("lock is poisoned")
+
+codex
+I’ll apply the patch on the remote repo using its shell, since the local workspace is unrelated to this task.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'apply_patch <<'\"'\"'PATCH'\"'\"'
+*** Begin Patch
+*** Update File: src/keyspace/mod.rs
+@@
+-    sync::{atomic::AtomicBool, Arc, MutexGuard},
++    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+@@
+     /// LSM-tree wrapper
+     #[doc(hidden)]
+     pub tree: AnyTree,
++
++    pub(crate) ingest_clear_lock: Mutex<()>,
+ 
+     pub(crate) supervisor: Supervisor,
+@@
+             tree,
++            ingest_clear_lock: Mutex::default(),
+             config,
+@@
+             config,
+             tree,
++            ingest_clear_lock: Mutex::default(),
+             is_deleted: AtomicBool::default(),
+*** End Patch
+PATCH'" in /private/tmp
+ exited 127 in 681ms:
+bash: line 1: apply_patch: command not found
+
+codex
+The remote image does not have `apply_patch`, so I’m using narrow scripted substitutions through the proxy and then checking the resulting diff carefully.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'perl -0pi -e \"s/sync::\\{atomic::AtomicBool, Arc, MutexGuard\\}/sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard}/\" src/keyspace/mod.rs
+perl -0pi -e \"s/(    \\/\\/\\/ LSM-tree wrapper\\n    #\\[doc\\(hidden\\)\\]\\n    pub tree: AnyTree,\\n)/"'$1'"\\n    pub(crate) ingest_clear_lock: Mutex<()>,\\n/\" src/keyspace/mod.rs
+perl -0pi -e \"s/(            name,\\n            tree,\\n            config,)/"'$1'"\\n            ingest_clear_lock: Mutex::default(),/\" src/keyspace/mod.rs
+perl -0pi -e \"s/(            config,\\n            tree,\\n            is_deleted:)/"'$1'"\\n            ingest_clear_lock: Mutex::default(),/\" src/keyspace/mod.rs
+git diff -- src/keyspace/mod.rs'" in /private/tmp
+ succeeded in 728ms:
+diff --git a/src/keyspace/mod.rs b/src/keyspace/mod.rs
+index edee274..ebd5921 100644
+--- a/src/keyspace/mod.rs
++++ b/src/keyspace/mod.rs
+@@ -25,7 +25,7 @@ use options::CreateOptions;
+ use std::{
+     ops::RangeBounds,
+     path::Path,
+-    sync::{atomic::AtomicBool, Arc, MutexGuard},
++    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+     time::Duration,
+ };
+ use write_delay::perform_write_stall;
+@@ -76,9 +76,8 @@ pub struct KeyspaceInner {
+     /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+     pub(crate) is_poisoned: Arc<AtomicBool>,
+ 
+-    /// LSM-tree wrapper
+-    #[doc(hidden)]
+-    pub tree: AnyTree,
++
++    pub(crate) ingest_clear_lock: Mutex<()>,
+ 
+     pub(crate) supervisor: Supervisor,
+ 
+@@ -305,9 +304,8 @@ impl Keyspace {
+     ) -> Self {
+         Self(Arc::new(KeyspaceInner {
+             id: keyspace_id,
+-            name,
+-            tree,
+-            config,
++
++            ingest_clear_lock: Mutex::default(),
+             supervisor: db.supervisor.clone(),
+             worker_messager: db.worker_pool.sender.clone(),
+             is_deleted: AtomicBool::default(),
+@@ -350,9 +348,8 @@ impl Keyspace {
+             worker_messager: db.worker_pool.sender.clone(),
+             id: keyspace_id,
+             name,
+-            config,
+-            tree,
+-            is_deleted: AtomicBool::default(),
++
++            ingest_clear_lock: Mutex::default(), AtomicBool::default(),
+             is_poisoned: db.is_poisoned.clone(),
+             stats: db.stats.clone(),
+             lock_file: db.lock_file.clone(),
+
+codex
+One substitution matched too broadly and damaged the initializer layout; I caught it in the diff before building. I’m restoring the struct fields and initializers explicitly now.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'sed -n \"65,95p\" src/keyspace/mod.rs && sed -n \"296,316p\" src/keyspace/mod.rs && sed -n \"340,356p\" src/keyspace/mod.rs'" in /private/tmp
+ succeeded in 771ms:
+    //
+    /// Keyspace name
+    pub(crate) name: KeyspaceKey,
+
+    // Keyspace configuration
+    #[doc(hidden)]
+    pub config: CreateOptions,
+
+    /// If `true`, the keyspace is marked as deleted
+    pub(crate) is_deleted: AtomicBool,
+
+    /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+    pub(crate) is_poisoned: Arc<AtomicBool>,
+
+
+    pub(crate) ingest_clear_lock: Mutex<()>,
+
+    pub(crate) supervisor: Supervisor,
+
+    /// Database-level stats
+    pub(crate) stats: Arc<Stats>,
+
+    pub(crate) worker_messager: flume::Sender<WorkerMessage>,
+
+    #[expect(unused)]
+    lock_file: LockedFileGuard,
+}
+
+impl Drop for KeyspaceInner {
+    fn drop(&mut self) {
+        log::trace!("Dropping KeyspaceInner: {:?}", self.name);
+    }
+
+    pub(crate) fn from_database(
+        keyspace_id: InternalKeyspaceId,
+        db: &Database,
+        tree: AnyTree,
+        name: KeyspaceKey,
+        config: CreateOptions,
+    ) -> Self {
+        Self(Arc::new(KeyspaceInner {
+            id: keyspace_id,
+
+            ingest_clear_lock: Mutex::default(),
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            lock_file: db.lock_file.clone(),
+            stats: db.stats.clone(),
+        }))
+    }
+        .use_descriptor_table(db.config.descriptor_table.clone())
+        .use_cache(db.config.cache.clone());
+
+        let base_config = apply_to_base_config(base_config, &config);
+        let tree = base_config.open()?;
+
+        Ok(Self(Arc::new(KeyspaceInner {
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            id: keyspace_id,
+            name,
+
+            ingest_clear_lock: Mutex::default(), AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            stats: db.stats.clone(),
+            lock_file: db.lock_file.clone(),
+        })))
+
+codex
+I’m replacing the affected blocks rather than layering more substitutions, to avoid leaving a malformed initializer hidden in the file.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'python3 - <<'\"'\"'PY'\"'\"'
+from pathlib import Path
+p=Path(\"src/keyspace/mod.rs\")
+s=p.read_text()
+s=s.replace(\"\"\"    /// If "'`true`, fsync failed during persisting, see `Error::Poisoned`
+    pub(crate) is_poisoned: Arc<AtomicBool>,
+
+
+    pub(crate) ingest_clear_lock: Mutex<()>,
+
+    pub(crate) supervisor: Supervisor,
+""", """    /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+    pub(crate) is_poisoned: Arc<AtomicBool>,
+
+    /// Serializes structural operations that replace/register table versions.
+    pub(crate) ingest_clear_lock: Mutex<()>,
+
+    /// LSM-tree wrapper
+    #[doc(hidden)]
+    pub tree: AnyTree,
+
+    pub(crate) supervisor: Supervisor,
+""")
+s=s.replace("""        Self(Arc::new(KeyspaceInner {
+            id: keyspace_id,
+
+            ingest_clear_lock: Mutex::default(),
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            lock_file: db.lock_file.clone(),
+            stats: db.stats.clone(),
+        }))
+""", """        Self(Arc::new(KeyspaceInner {
+            id: keyspace_id,
+            name,
+            tree,
+            config,
+            ingest_clear_lock: Mutex::default(),
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            lock_file: db.lock_file.clone(),
+            stats: db.stats.clone(),
+        }))
+""")
+s=s.replace("""        Ok(Self(Arc::new(KeyspaceInner {
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            id: keyspace_id,
+            name,
+
+            ingest_clear_lock: Mutex::default(), AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            stats: db.stats.clone(),
+            lock_file: db.lock_file.clone(),
+        })))
+""", """        Ok(Self(Arc::new(KeyspaceInner {
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            id: keyspace_id,
+            name,
+            config,
+            tree,
+            ingest_clear_lock: Mutex::default(),
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            stats: db.stats.clone(),
+            lock_file: db.lock_file.clone(),
+        })))
+""")
+p.write_text(s)
+PY
+git diff -- src/keyspace/mod.rs'"'" in /private/tmp
+ succeeded in 782ms:
+diff --git a/src/keyspace/mod.rs b/src/keyspace/mod.rs
+index edee274..f919706 100644
+--- a/src/keyspace/mod.rs
++++ b/src/keyspace/mod.rs
+@@ -25,7 +25,7 @@ use options::CreateOptions;
+ use std::{
+     ops::RangeBounds,
+     path::Path,
+-    sync::{atomic::AtomicBool, Arc, MutexGuard},
++    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+     time::Duration,
+ };
+ use write_delay::perform_write_stall;
+@@ -76,6 +76,9 @@ pub struct KeyspaceInner {
+     /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+     pub(crate) is_poisoned: Arc<AtomicBool>,
+ 
++    /// Serializes structural operations that replace/register table versions.
++    pub(crate) ingest_clear_lock: Mutex<()>,
++
+     /// LSM-tree wrapper
+     #[doc(hidden)]
+     pub tree: AnyTree,
+@@ -308,6 +311,7 @@ impl Keyspace {
+             name,
+             tree,
+             config,
++            ingest_clear_lock: Mutex::default(),
+             supervisor: db.supervisor.clone(),
+             worker_messager: db.worker_pool.sender.clone(),
+             is_deleted: AtomicBool::default(),
+@@ -352,6 +356,7 @@ impl Keyspace {
+             name,
+             config,
+             tree,
++            ingest_clear_lock: Mutex::default(),
+             is_deleted: AtomicBool::default(),
+             is_poisoned: db.is_poisoned.clone(),
+             stats: db.stats.clone(),
+
+codex
+The guard needs to live inside `Ingestion`, not just around `start_ingestion()`, because the dependency defers version registration until `finish()`. I’m wiring that lifetime now.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'python3 - <<'\"'\"'PY'\"'\"'
+from pathlib import Path
+p=Path(\"src/keyspace/mod.rs\")
+s=p.read_text()
+s=s.replace(\"\"\"    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+\"\"\", \"\"\"    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let _ingest_clear_lock = self
+            .ingest_clear_lock
+            .lock()
+            .map_err(|_| crate::Error::Poisoned)?;
+        let mut journal_writer = self.supervisor.journal.get_writer();
+\"\"\")
+p.write_text(s)
+
+p=Path(\"src/ingestion.rs\")
+s=p.read_text()
+s=s.replace(\"\"\"use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+\"\"\", \"\"\"use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+use std::sync::MutexGuard;
+\"\"\")
+s=s.replace(\"\"\"pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+}
+\"\"\", \"\"\"pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+    _ingest_clear_lock: MutexGuard<'a, ()>,
+}
+\"\"\")
+s=s.replace(\"\"\"    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self { keyspace, inner })
+    }
+\"\"\", \"\"\"    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let ingest_clear_lock = keyspace
+            .ingest_clear_lock
+            .lock()
+            .map_err(|_| crate::Error::Poisoned)?;
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self {
+            keyspace,
+            inner,
+            _ingest_clear_lock: ingest_clear_lock,
+        })
+    }
+\"\"\")
+p.write_text(s)
+PY
+git diff -- src/keyspace/mod.rs src/ingestion.rs'" in /private/tmp
+ exited 1 in 0ms:
+zsh:31: parse error near `}'
+
+codex
+The previous edit command hit shell quoting on Rust lifetimes. I’m rerunning it through `bash -lc` so the script is interpreted as intended.
+exec
+/bin/zsh -lc "/tmp/box-sh-min \"bash -lc 'python3 - <<'\\''PY'\\''
+from pathlib import Path
+p=Path(\\\"src/keyspace/mod.rs\\\")
+s=p.read_text()
+s=s.replace(\\\"\\\"\\\"    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+\\\"\\\"\\\", \\\"\\\"\\\"    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let _ingest_clear_lock = self
+            .ingest_clear_lock
+            .lock()
+            .map_err(|_| crate::Error::Poisoned)?;
+        let mut journal_writer = self.supervisor.journal.get_writer();
+\\\"\\\"\\\")
+p.write_text(s)
+
+p=Path(\\\"src/ingestion.rs\\\")
+s=p.read_text()
+s=s.replace(\\\"\\\"\\\"use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+\\\"\\\"\\\", \\\"\\\"\\\"use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+use std::sync::MutexGuard;
+\\\"\\\"\\\")
+s=s.replace(\\\"\\\"\\\"pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+}
+\\\"\\\"\\\", \\\"\\\"\\\"pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+    _ingest_clear_lock: MutexGuard<'a, ()>,
+}
+\\\"\\\"\\\")
+s=s.replace(\\\"\\\"\\\"    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self { keyspace, inner })
+    }
+\\\"\\\"\\\", \\\"\\\"\\\"    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let ingest_clear_lock = keyspace
+            .ingest_clear_lock
+            .lock()
+            .map_err(|_| crate::Error::Poisoned)?;
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self {
+            keyspace,
+            inner,
+            _ingest_clear_lock: ingest_clear_lock,
+        })
+    }
+\\\"\\\"\\\")
+p.write_text(s)
+PY
+git diff -- src/keyspace/mod.rs src/ingestion.rs'\"" in /private/tmp
+ exited 2 in 758ms:
+bash: line 28: warning: here-document at line 1 delimited by end-of-file (wanted `PY')
+  File "<stdin>", line 29
+    s=s.replace("""pub struct Ingestion<a
+                                         ^
+SyntaxError: EOF while scanning triple-quoted string literal
+bash: line 29: keyspace:: command not found
+bash: line 30: $'a Keyspace,\n    inner: AnyIngestion<a': command not found
+bash: line 31: syntax error near unexpected token `}'
+bash: line 31: `}'
+
+codex
+I’m simplifying the remote edit command to avoid nested quote escaping entirely.
+exec
+/bin/zsh -lc "/tmp/box-sh-min \"python3 - <<PY
+from pathlib import Path
+p=Path('src/keyspace/mod.rs')
+s=p.read_text()
+s=s.replace('''    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+''', '''    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let _ingest_clear_lock = self
+            .ingest_clear_lock
+            .lock()
+            .map_err(|_| crate::Error::Poisoned)?;
+        let mut journal_writer = self.supervisor.journal.get_writer();
+''')
+p.write_text(s)
+
+p=Path('src/ingestion.rs')
+s=p.read_text()
+s=s.replace('''use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+''', '''use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+use std::sync::MutexGuard;
+''')
+s=s.replace('''pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+}
+''', '''pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+    _ingest_clear_lock: MutexGuard<'a, ()>,
+}
+''')
+s=s.replace('''    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self { keyspace, inner })
+    }
+''', '''    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let ingest_clear_lock = keyspace
+            .ingest_clear_lock
+            .lock()
+            .map_err(|_| crate::Error::Poisoned)?;
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self {
+            keyspace,
+            inner,
+            _ingest_clear_lock: ingest_clear_lock,
+        })
+    }
+''')
+p.write_text(s)
+PY
+git diff -- src/keyspace/mod.rs src/ingestion.rs\"" in /private/tmp
+ succeeded in 950ms:
+diff --git a/src/ingestion.rs b/src/ingestion.rs
+index e90d57a..5d940a2 100644
+--- a/src/ingestion.rs
++++ b/src/ingestion.rs
+@@ -4,16 +4,26 @@
+ 
+ use crate::{worker_pool::WorkerMessage, Keyspace};
+ use lsm_tree::{AnyIngestion, UserKey, UserValue};
++use std::sync::MutexGuard;
+ 
+ pub struct Ingestion<'a> {
+     keyspace: &'a Keyspace,
+     inner: AnyIngestion<'a>,
++    _ingest_clear_lock: MutexGuard<'a, ()>,
+ }
+ 
+ impl<'a> Ingestion<'a> {
+     pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
++        let ingest_clear_lock = keyspace
++            .ingest_clear_lock
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?;
+         let inner = keyspace.tree.ingestion()?;
+-        Ok(Self { keyspace, inner })
++        Ok(Self {
++            keyspace,
++            inner,
++            _ingest_clear_lock: ingest_clear_lock,
++        })
+     }
+ 
+     pub fn write<K: Into<UserKey>, V: Into<UserValue>>(
+diff --git a/src/keyspace/mod.rs b/src/keyspace/mod.rs
+index edee274..16b675a 100644
+--- a/src/keyspace/mod.rs
++++ b/src/keyspace/mod.rs
+@@ -25,7 +25,7 @@ use options::CreateOptions;
+ use std::{
+     ops::RangeBounds,
+     path::Path,
+-    sync::{atomic::AtomicBool, Arc, MutexGuard},
++    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+     time::Duration,
+ };
+ use write_delay::perform_write_stall;
+@@ -76,6 +76,9 @@ pub struct KeyspaceInner {
+     /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+     pub(crate) is_poisoned: Arc<AtomicBool>,
+ 
++    /// Serializes structural operations that replace/register table versions.
++    pub(crate) ingest_clear_lock: Mutex<()>,
++
+     /// LSM-tree wrapper
+     #[doc(hidden)]
+     pub tree: AnyTree,
+@@ -236,6 +239,10 @@ impl Keyspace {
+     pub fn clear(&self) -> crate::Result<()> {
+         use std::sync::atomic::Ordering;
+ 
++        let _ingest_clear_lock = self
++            .ingest_clear_lock
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?;
+         let mut journal_writer = self.supervisor.journal.get_writer();
+ 
+         // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+@@ -308,6 +315,7 @@ impl Keyspace {
+             name,
+             tree,
+             config,
++            ingest_clear_lock: Mutex::default(),
+             supervisor: db.supervisor.clone(),
+             worker_messager: db.worker_pool.sender.clone(),
+             is_deleted: AtomicBool::default(),
+@@ -352,6 +360,7 @@ impl Keyspace {
+             name,
+             config,
+             tree,
++            ingest_clear_lock: Mutex::default(),
+             is_deleted: AtomicBool::default(),
+             is_poisoned: db.is_poisoned.clone(),
+             stats: db.stats.clone(),
+
+codex
+The intended diff is now in place. I’m compiling first, then I’ll run the hidden oracle and adjust if the compiler exposes a lifetime or ordering issue.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'cargo check'" in /private/tmp
+ succeeded in 5170ms:
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling crossbeam-utils v0.8.21
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+    Checking cfg-if v1.0.4
+    Checking scopeguard v1.2.0
+   Compiling getrandom v0.4.2
+   Compiling rustix v1.1.4
+    Checking lock_api v0.4.14
+    Checking once_cell v1.21.4
+    Checking linux-raw-sys v0.12.1
+    Checking bitflags v2.13.0
+   Compiling parking_lot_core v0.9.12
+   Compiling syn v2.0.117
+    Checking crossbeam-epoch v0.9.18
+    Checking smallvec v1.15.1
+    Checking compare v0.0.6
+    Checking twox-hash v2.1.2
+    Checking hashbrown v0.16.1
+    Checking log v0.4.32
+    Checking byteorder-lite v0.1.0
+    Checking equivalent v1.0.2
+    Checking xxhash-rust v0.8.15
+    Checking fastrand v2.4.1
+    Checking quick_cache v0.6.23
+    Checking sfa v1.0.0
+    Checking interval-heap v0.0.5
+    Checking lz4_flex v0.13.1
+    Checking crossbeam-skiplist v0.1.3
+    Checking spin v0.9.8
+    Checking rustc-hash v2.1.2
+    Checking tempfile v3.27.0
+    Checking hashbrown v0.14.5
+    Checking byteview v0.10.1
+    Checking varint-rs v2.2.1
+    Checking self_cell v1.2.2
+    Checking flume v0.12.0
+    Checking dashmap v6.2.1
+   Compiling enum_dispatch v0.3.13
+    Checking lsm-tree v3.1.5
+    Checking fjall v3.1.5 (/home/ec2-user/fjall)
+warning: usage of an `unsafe` block
+   --> src/journal/entry.rs:200:41
+    |
+200 |                         let mut value = unsafe { Slice::builder_unzeroed(value_len as usize) };
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> src/journal/entry.rs:199:32
+    |
+199 |                         #[warn(unsafe_code)]
+    |                                ^^^^^^^^^^^
+
+warning: enum `RecoveryMode` is never used
+  --> src/journal/error.rs:10:10
+   |
+10 | pub enum RecoveryMode {
+   |          ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `stats` is never read
+  --> src/keyspace/mod.rs:89:16
+   |
+60 | pub struct KeyspaceInner {
+   |            ------------- field in this struct
+...
+89 |     pub(crate) stats: Arc<Stats>,
+   |                ^^^^^
+
+warning: field `backpressure_lock` is never read
+  --> src/supervisor.rs:35:16
+   |
+16 | pub struct SupervisorInner {
+   |            --------------- field in this struct
+...
+35 |     pub(crate) backpressure_lock: Mutex<()>,
+   |                ^^^^^^^^^^^^^^^^^
+
+warning: `fjall` (lib) generated 4 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.32s
+
+codex
+`cargo check` passes. I’m running the hidden reproducer/oracle now; if it still fails, I’ll inspect whether another structural path needs the same serialization.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'bash /tmp/fj_check.sh'" in /private/tmp
+codex
+The oracle is still running after 30 seconds, which is plausible for a concurrency stress check. I’m waiting for completion rather than interrupting it.
+ succeeded in 59030ms:
+CHECK: PASS (survived 1x55s with no race crash/corruption)
+
+codex
+The hidden oracle passed. I’m collecting the final diff stat and changed function names for the report.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'git diff --stat'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'git diff -- src/keyspace/mod.rs src/ingestion.rs'" in /private/tmp
+ succeeded in 753ms:
+ Cargo.toml          |  1 +
+ src/ingestion.rs    | 12 +++++++++++-
+ src/keyspace/mod.rs | 11 ++++++++++-
+ 3 files changed, 22 insertions(+), 2 deletions(-)
+
+ succeeded in 722ms:
+diff --git a/src/ingestion.rs b/src/ingestion.rs
+index e90d57a..5d940a2 100644
+--- a/src/ingestion.rs
++++ b/src/ingestion.rs
+@@ -4,16 +4,26 @@
+ 
+ use crate::{worker_pool::WorkerMessage, Keyspace};
+ use lsm_tree::{AnyIngestion, UserKey, UserValue};
++use std::sync::MutexGuard;
+ 
+ pub struct Ingestion<'a> {
+     keyspace: &'a Keyspace,
+     inner: AnyIngestion<'a>,
++    _ingest_clear_lock: MutexGuard<'a, ()>,
+ }
+ 
+ impl<'a> Ingestion<'a> {
+     pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
++        let ingest_clear_lock = keyspace
++            .ingest_clear_lock
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?;
+         let inner = keyspace.tree.ingestion()?;
+-        Ok(Self { keyspace, inner })
++        Ok(Self {
++            keyspace,
++            inner,
++            _ingest_clear_lock: ingest_clear_lock,
++        })
+     }
+ 
+     pub fn write<K: Into<UserKey>, V: Into<UserValue>>(
+diff --git a/src/keyspace/mod.rs b/src/keyspace/mod.rs
+index edee274..16b675a 100644
+--- a/src/keyspace/mod.rs
++++ b/src/keyspace/mod.rs
+@@ -25,7 +25,7 @@ use options::CreateOptions;
+ use std::{
+     ops::RangeBounds,
+     path::Path,
+-    sync::{atomic::AtomicBool, Arc, MutexGuard},
++    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+     time::Duration,
+ };
+ use write_delay::perform_write_stall;
+@@ -76,6 +76,9 @@ pub struct KeyspaceInner {
+     /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+     pub(crate) is_poisoned: Arc<AtomicBool>,
+ 
++    /// Serializes structural operations that replace/register table versions.
++    pub(crate) ingest_clear_lock: Mutex<()>,
++
+     /// LSM-tree wrapper
+     #[doc(hidden)]
+     pub tree: AnyTree,
+@@ -236,6 +239,10 @@ impl Keyspace {
+     pub fn clear(&self) -> crate::Result<()> {
+         use std::sync::atomic::Ordering;
+ 
++        let _ingest_clear_lock = self
++            .ingest_clear_lock
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?;
+         let mut journal_writer = self.supervisor.journal.get_writer();
+ 
+         // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+@@ -308,6 +315,7 @@ impl Keyspace {
+             name,
+             tree,
+             config,
++            ingest_clear_lock: Mutex::default(),
+             supervisor: db.supervisor.clone(),
+             worker_messager: db.worker_pool.sender.clone(),
+             is_deleted: AtomicBool::default(),
+@@ -352,6 +360,7 @@ impl Keyspace {
+             name,
+             config,
+             tree,
++            ingest_clear_lock: Mutex::default(),
+             is_deleted: AtomicBool::default(),
+             is_poisoned: db.is_poisoned.clone(),
+             stats: db.stats.clone(),
+
+codex
+The diff stat includes a pre-existing `Cargo.toml` change that I did not make. I’m checking it so the final report can distinguish my source edits from unrelated workspace state.
+exec
+/bin/zsh -lc "/tmp/box-sh-min 'git diff -- Cargo.toml'" in /private/tmp
+ succeeded in 678ms:
+diff --git a/Cargo.toml b/Cargo.toml
+index 35d699a..098a6f5 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -35,6 +35,7 @@ lz4_flex = { version = "0.13.0", optional = true }
+ flume = { version = "0.12.0", default-features = false }
+ 
+ [dev-dependencies]
++anyhow = "1"
+ nanoid = "0.4.0"
+ test-log = "0.2.18"
+ rand = "0.10.0"
+
+codex
+Verdict: PASS
+
+Changed source files/functions:
+`src/keyspace/mod.rs`: `KeyspaceInner`, `Keyspace::clear`, keyspace constructors  
+`src/ingestion.rs`: `Ingestion`, `Ingestion::new`
+
+Fix: added a keyspace-local mutex that serializes structural version-changing operations between `.clear()` and the ingestion API. `start_ingestion()` now holds the guard for the full ingestion lifetime through `finish()`, while `clear()` takes the same guard before mutating the tree version state. Ordinary journaled writes remain on the existing path.
+
+Verification:
+`cargo check` passed.  
+`bash /tmp/fj_check.sh` reported `CHECK: PASS (survived 1x55s with no race crash/corruption)`.
+
+Repo-local `git diff --stat`:
+```text
+ Cargo.toml          |  1 +
+ src/ingestion.rs    | 12 +++++++++++-
+ src/keyspace/mod.rs | 11 ++++++++++-
+ 3 files changed, 22 insertions(+), 2 deletions(-)
+```
+
+Note: `Cargo.toml` already contains an unrelated dev-dependency diff; I did not modify build/config files.
+tokens used
+73,270
+real 254.64
+user 10.67
+sys 9.32

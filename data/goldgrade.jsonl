@@ -6,3 +6,4 @@
 {"repo": "stacklok/toolhive", "pr": 5256, "verdict": "PASS"}
 {"repo": "sorairolake/qrtool", "pr": 1002, "verdict": "PASS"}
 {"repo": "wild-linker/wild", "pr": 1924, "verdict": "FAIL"}
+{"repo": "pingcap/tidb", "pr": 68318, "verdict": "PASS"}

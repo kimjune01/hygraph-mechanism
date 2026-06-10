@@ -1,0 +1,112 @@
+diff --git a/src/compaction/worker.rs b/src/compaction/worker.rs
+index 33b121c..6346ab0 100644
+--- a/src/compaction/worker.rs
++++ b/src/compaction/worker.rs
+@@ -27,6 +27,11 @@ pub fn run(
+ 
+     stats.active_compaction_count.fetch_add(1, Relaxed);
+ 
++    let _tree_operation_lock = keyspace
++        .tree_operation_lock
++        .lock()
++        .expect("lock is poisoned");
++
+     log::debug!("Compacting keyspace {:?}", keyspace.name);
+ 
+     let start = Instant::now();
+diff --git a/src/flush/worker.rs b/src/flush/worker.rs
+index 71557c0..41668cd 100644
+--- a/src/flush/worker.rs
++++ b/src/flush/worker.rs
+@@ -15,6 +15,12 @@ pub fn run(
+     snapshot_tracker: &SnapshotTracker,
+     _stats: &Stats,
+ ) -> crate::Result<()> {
++    let _tree_operation_lock = task
++        .keyspace
++        .tree_operation_lock
++        .lock()
++        .expect("lock is poisoned");
++
+     log::debug!("Flushing keyspace {:?}", task.keyspace.name);
+ 
+     let gc_watermark = snapshot_tracker.get_seqno_safe_to_gc();
+diff --git a/src/ingestion.rs b/src/ingestion.rs
+index e90d57a..35d6edd 100644
+--- a/src/ingestion.rs
++++ b/src/ingestion.rs
+@@ -51,6 +51,12 @@ impl<'a> Ingestion<'a> {
+         // insert seqno=1
+         let _journal_lock = self.keyspace.supervisor.journal.get_writer();
+ 
++        let _tree_operation_lock = self
++            .keyspace
++            .tree_operation_lock
++            .lock()
++            .expect("lock is poisoned");
++
+         self.inner
+             .finish()
+             .inspect(|()| {
+diff --git a/src/keyspace/mod.rs b/src/keyspace/mod.rs
+index edee274..c9b3fa5 100644
+--- a/src/keyspace/mod.rs
++++ b/src/keyspace/mod.rs
+@@ -25,7 +25,7 @@ use options::CreateOptions;
+ use std::{
+     ops::RangeBounds,
+     path::Path,
+-    sync::{atomic::AtomicBool, Arc, MutexGuard},
++    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+     time::Duration,
+ };
+ use write_delay::perform_write_stall;
+@@ -87,6 +87,8 @@ pub struct KeyspaceInner {
+ 
+     pub(crate) worker_messager: flume::Sender<WorkerMessage>,
+ 
++    pub(crate) tree_operation_lock: Mutex<()>,
++
+     #[expect(unused)]
+     lock_file: LockedFileGuard,
+ }
+@@ -247,6 +249,11 @@ impl Keyspace {
+ 
+         journal_writer.write_clear(self.id, seqno)?;
+ 
++        let _tree_operation_lock = self
++            .tree_operation_lock
++            .lock()
++            .expect("lock is poisoned");
++
+         if !self.config.manual_journal_persist {
+             journal_writer
+                 .persist(crate::PersistMode::Buffer)
+@@ -312,6 +319,7 @@ impl Keyspace {
+             worker_messager: db.worker_pool.sender.clone(),
+             is_deleted: AtomicBool::default(),
+             is_poisoned: db.is_poisoned.clone(),
++            tree_operation_lock: Mutex::default(),
+             lock_file: db.lock_file.clone(),
+             stats: db.stats.clone(),
+         }))
+@@ -354,6 +362,7 @@ impl Keyspace {
+             tree,
+             is_deleted: AtomicBool::default(),
+             is_poisoned: db.is_poisoned.clone(),
++            tree_operation_lock: Mutex::default(),
+             stats: db.stats.clone(),
+             lock_file: db.lock_file.clone(),
+         })))
+@@ -866,6 +875,11 @@ impl Keyspace {
+     /// Will return `Err` if an IO error occurs.
+     #[doc(hidden)]
+     pub fn major_compact(&self) -> crate::Result<()> {
++        let _tree_operation_lock = self
++            .tree_operation_lock
++            .lock()
++            .expect("lock is poisoned");
++
+         self.tree.major_compact(
+             64_000_000,
+             self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),

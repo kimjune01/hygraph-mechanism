@@ -1,0 +1,3717 @@
+Reading additional input from stdin...
+OpenAI Codex v0.137.0
+--------
+workdir: /private/tmp
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: none
+reasoning summaries: none
+session id: 019eaf46-eb75-7271-a64d-fc86dce09821
+--------
+user
+You are a helpful assistant that can interact with a computer shell to solve programming tasks.
+
+<issue>
+The following bug was reported (this is the only specification you are given):
+Title: concurrent calls to `.clear()` and the ingestion API causes crash and corruption (fjall, a Rust LSM-tree storage engine)
+Body: Running this program eventually crashes and corrupts the database:
+
+```rust
+let db = fjall::Database::builder("./db").max_journaling_size(67108864).manual_journal_persist(true).open()?;
+std::thread::scope(|spawner| {
+    let keyspace = db.keyspace("keyspace1", fjall::KeyspaceCreateOptions::default).unwrap();
+    spawner.spawn({ let keyspace = keyspace.clone(); move || {
+        for _ in 0..1000 { keyspace.clear()?; std::thread::sleep(Duration::from_millis(10)); } Ok(()) }});
+    spawner.spawn({ let keyspace = keyspace.clone(); move || {
+        for _ in 0..1000 { let mut igst = keyspace.start_ingestion()?;
+            for i in 0..=10240 { igst.write(format!("key{i:09}"), [(i%256) as u8; 256])?; } igst.finish()?; } Ok(()) }});
+});
+```
+
+It eventually panics in a worker thread with `assertion left == right failed: invalid table IDs` (lsm-tree version management), poisons a lock, and the process hangs. The database is left corrupted, leaking thousands of versions under db/keyspaces/. The crash happens faster with manual_journal_persist(true). One thread clears the keyspace repeatedly while another ingests; they are not safely synchronized.
+
+</issue>
+
+<instructions>
+# Task Instructions
+
+## Overview
+
+You're a software engineer interacting continuously with a computer by submitting shell commands. You'll be helping fix the bug described in the issue above. Your task is specifically to make changes to non-test source files in order to fix the issue in a way that is general and consistent with the codebase.
+
+This is an interactive process: you think and issue commands, see the result, then think and issue your next command(s).
+
+## The shell
+
+The repository lives only on a remote box. You reach it ONLY through the proxy `/tmp/box-sh`, e.g. `/tmp/box-sh-hg 'ls && sed -n "1,40p" src/keyspace/mod.rs'`. The proxy lands you in the repository root. Every command runs in a fresh subshell (directory and environment changes do NOT persist between commands; prefix with `cd ... && ...` within a single command if needed). Do not use your own local filesystem; it is an unrelated scratch dir.
+
+## Boundaries
+
+- MODIFY: regular source code files in the repository.
+- DO NOT MODIFY: test files, build/config files. Do NOT edit anything under `examples/` (that is the bug reproducer/oracle) or `tests/`, and do not inspect git history for "the fix" (it is not reachable).
+- Do not browse the web.
+
+## Recommended workflow
+
+1. Analyze the codebase by finding and reading relevant files (via the proxy).
+2. Reproduce the issue if you can.
+3. Edit the source to resolve the issue.
+4. Verify your fix.
+5. Test edge cases to ensure your fix is robust and general.
+
+## Test oracle
+
+A hidden test oracle is available. It prints only PASS or FAIL, never the test body:
+    /tmp/box-sh-hg 'bash /tmp/fj_check.sh'
+It currently prints FAIL. Iterate until it prints PASS. Make a real fix consistent with the issue, not a hack targeted at the opaque oracle.
+
+## When done
+
+Stop as soon as the oracle prints PASS (or when you have exhausted reasonable effort). Then return a short final report: verdict (PASS/FAIL), the source file(s) and function(s) you changed, a one-paragraph description of the fix, and the repo-local `git diff --stat`. Your final message is a report for the orchestrator, not a user.
+</instructions>
+
+You are additionally given a DIAGNOSIS HYPOTHESIS GRAPH produced by a separate read-only diagnostician for this exact bug. Use it to guide your fix (note: the cleanest fix may be in the lsm-tree dependency which you cannot edit here, so you must achieve equivalent synchronization at the fjall level -- e.g. a lock that clear() and the ingestion/flush paths both hold):
+<<<HYPOTHESIS_GRAPH
+## Symptom
+
+Concurrent `Keyspace::clear()` plus ingestion eventually panics in a background worker:
+
+```text
+assertion left == right failed: invalid table IDs
+```
+
+The assert is in `lsm-tree` version movement:
+
+`lsm-tree-3.1.5/src/version/mod.rs:563-572`
+
+```rust
+pub fn with_moved(&self, ids: &[TableId], dest_level: usize) -> Self {
+    let affected_tables = self
+        .iter_tables()
+        .filter(|x| ids.contains(&x.id()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert_eq!(affected_tables.len(), ids.len(), "invalid table IDs");
+```
+
+That means a compaction task selected table IDs from one version, but by the time it tried to apply the move, those IDs were no longer present in the current version.
+
+## Localization
+
+`src/keyspace/mod.rs:236-264`
+
+```rust
+pub fn clear(&self) -> crate::Result<()> {
+    let mut journal_writer = self.supervisor.journal.get_writer();
+    ...
+    let seqno = self.supervisor.seqno.next();
+    journal_writer.write_clear(self.id, seqno)?;
+    ...
+    self.tree.clear()?;
+    self.supervisor.snapshot_tracker.publish(seqno);
+    drop(journal_writer);
+```
+
+`clear()` serializes with the journal writer, then calls into `lsm-tree`.
+
+`lsm-tree-3.1.5/src/tree/mod.rs:264-279`
+
+```rust
+fn clear(&self) -> crate::Result<()> {
+    let config = self.tree_config();
+    let mut versions = self.get_version_history_lock();
+
+    versions.upgrade_version(
+        &config.path,
+        |v| {
+            let mut copy = v.clone();
+            copy.active_memtable = Arc::new(Memtable::new(self.memtable_id_counter.next()));
+            copy.sealed_memtables = Arc::default();
+            copy.version = Version::new(v.version.id() + 1, self.tree_type());
+            Ok(copy)
+        },
+```
+
+This replaces the active memtable, drops all sealed memtables, and replaces the table version with an empty `Version`. It does not take the tree `flush_lock`, `compaction_state`, or `major_compaction_lock`.
+
+Ingestion finish is only partly serialized by fjall’s journal lock:
+
+`src/ingestion.rs:36-55`
+
+```rust
+pub fn finish(self) -> crate::Result<()> {
+    let _journal_lock = self.keyspace.supervisor.journal.get_writer();
+
+    self.inner.finish()
+```
+
+Inside `lsm-tree`, ingestion finish uses the tree flush lock and compaction/version locks:
+
+`lsm-tree-3.1.5/src/tree/ingest.rs:257-263`
+
+```rust
+let flush_lock = self.tree.get_flush_lock();
+
+self.tree.rotate_memtable();
+self.tree.flush(&flush_lock, 0)?;
+```
+
+`lsm-tree-3.1.5/src/tree/ingest.rs:273-325`
+
+```rust
+let mut _compaction_state = self.tree.compaction_state.lock().expect("lock is poisoned");
+let mut version_lock = self.tree.version_history.write().expect("lock is poisoned");
+let global_seqno = self.tree.config.seqno.next();
+...
+copy.version = copy.version.with_new_l0_run(&created_tables, None, None);
+```
+
+Flush workers also rely on `flush_lock`, but `clear()` ignores it:
+
+`src/flush/worker.rs:22-27`
+
+```rust
+let flush_lock = task.keyspace.tree.get_flush_lock();
+
+task.keyspace.tree.flush(&flush_lock, gc_watermark)
+```
+
+`lsm-tree-3.1.5/src/abstract_tree.rs:81-115`
+
+```rust
+let version_history = self.get_version_history_lock();
+let latest = version_history.latest_version();
+let sealed_ids = latest.sealed_memtables.iter().map(|mt| mt.id).collect::<Vec<_>>();
+...
+drop(version_history);
+
+if let Some((tables, blob_files)) = self.flush_to_tables(stream)? {
+    self.register_tables(&tables, blob_files.as_deref(), None, &sealed_ids, seqno_threshold)?;
+}
+```
+
+So a flush can snapshot sealed memtables, drop the version lock, write tables, then later register those old tables into whatever version is current after a concurrent clear.
+
+The panic path is the compaction move path:
+
+`lsm-tree-3.1.5/src/compaction/worker.rs:92-119`
+
+```rust
+let compaction_state = opts.compaction_state.lock().expect("lock is poisoned");
+let version_history_lock = opts.version_history.read().expect("lock is poisoned");
+
+let choice = opts.strategy.choose(
+    &version_history_lock.latest_version().version,
+    &opts.config,
+    &compaction_state,
+);
+
+match choice {
+    Choice::Move(payload) => {
+        drop(version_history_lock);
+        move_tables(&compaction_state, opts, &payload)
+    }
+```
+
+`lsm-tree-3.1.5/src/compaction/worker.rs:184-219`
+
+```rust
+fn move_tables(...) -> crate::Result<()> {
+    let mut version_history_lock = opts.version_history.write().expect("lock is poisoned");
+
+    let table_ids = payload.table_ids.iter().copied().collect::<Vec<_>>();
+
+    version_history_lock.upgrade_version(
+        &opts.config.path,
+        |current| {
+            let mut copy = current.clone();
+            copy.version = copy
+                .version
+                .with_moved(&table_ids, payload.dest_level as usize);
+```
+
+There is a gap between choosing table IDs under a read lock and applying the move under a write lock. `clear()` can enter that gap because it does not lock `compaction_state`. It empties the version, then `move_tables()` calls `with_moved()` with stale table IDs and hits `invalid table IDs`.
+
+## Root-cause hypothesis
+
+`Keyspace::clear()` is a destructive version rewrite, but it is synchronized only with the journal writer and the `version_history` write lock. It is not synchronized with the tree’s operation-level locks that protect multi-step flush, ingestion, and compaction transitions.
+
+The failing interleaving is:
+
+1. Ingestion finishes and registers new tables, then schedules compaction.
+2. A compaction worker chooses `Choice::Move` from version `V`, collecting table IDs.
+3. The worker drops the version read lock before acquiring the write lock.
+4. Concurrent `clear()` takes the version write lock and publishes version `V+1` with no tables.
+5. The compaction worker acquires the write lock and applies its stale move payload to the now-empty version.
+6. `Version::with_moved()` cannot find the selected IDs and asserts `invalid table IDs`.
+
+There is a second corruption path with the same missing synchronization: a flush or ingestion-triggered flush can capture sealed memtables, drop the version lock while writing table files, then `clear()` empties the version, and the later flush registration can add pre-clear data back into the post-clear version.
+
+`manual_journal_persist(true)` likely makes the crash faster by shortening the journal critical section in `clear()` and normal writes. It changes timing, not the fundamental race. The live panic is in version/compaction state, not journal replay.
+
+The unused `SupervisorInner::backpressure_lock: Mutex<()>` is not directly relevant. It is declared and initialized only:
+
+`src/supervisor.rs:35`
+
+```rust
+pub(crate) backpressure_lock: Mutex<()>,
+```
+
+`src/db.rs:642`, `src/db.rs:883`
+
+```rust
+backpressure_lock: Mutex::default(),
+```
+
+No code acquires it, and it is supervisor-global rather than tied to the per-tree `flush_lock`, `compaction_state`, and `version_history` invariants being violated.
+
+## Rivals considered and killed
+
+1. Journal ordering or `manual_journal_persist(true)` corrupts recovery.
+
+Killed: the observed panic occurs in a live worker inside `Version::with_moved()`, before recovery. `clear()` and `Ingestion::finish()` both take the fjall journal writer, so journal ordering serializes those two API endpoints. The crash comes from lsm-tree background version transitions that are not covered by the journal lock.
+
+2. Table ID reuse after `clear()` creates duplicate or invalid table IDs.
+
+Killed: `clear()` replaces memtables and `Version::new(...)`, but does not reset `table_id_counter`. Table IDs for ingestion and flush come from the shared monotonic counter. The assert is not caused by duplicate IDs; it is caused by a stale compaction payload whose IDs were valid in the version it inspected and absent in the version after `clear()`.
+
+## Predicted fix shape
+
+`clear()` must become mutually exclusive with all multi-step tree mutations that snapshot one version and later publish another version.
+
+The likely shape is in `lsm-tree` around `Tree::clear()`:
+
+- Take the tree `flush_lock` before clearing so no flush or ingestion-triggered flush can be between “snapshot sealed memtables” and “register flushed tables”.
+- Take `compaction_state` or an equivalent compaction barrier before clearing so compaction cannot choose IDs from the old version and apply them after the clear.
+- Possibly take the major-compaction/write side or stop/drain in-flight compactions, depending on intended semantics, because merge compactions also hide old tables, do CPU work, then publish a new version later.
+- Keep the version rewrite itself under `version_history.write()` as it already does.
+- In fjall, `Keyspace::clear()` should continue to serialize journal order, but the missing protection is inside the tree-level clear against flush/ingest/compaction, not in the unused `backpressure_lock`.
+
+A defensive improvement would also make `move_tables()` revalidate like the merge/drop paths do instead of asserting, but that only prevents the panic. The correctness fix is that `clear()` must not race with in-flight flush/ingestion/compaction registration that can resurrect or move pre-clear tables.
+HYPOTHESIS_GRAPH
+codex
+I’ll work directly through the remote proxy, inspect the fjall-level clear and ingestion paths, then patch the source side only. I’ll use the hypothesis graph as a map but verify the actual API surface before editing.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'rg -n \"get_flush_lock|compaction_state|major_compaction|backpressure_lock|clear\\(\" src crates || true'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'pwd && rg -n \"pub fn clear|start_ingestion|struct Ingestion|finish\\(\" src crates || true'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'git status --short'" in /private/tmp
+ succeeded in 714ms:
+bash: line 1: rg: command not found
+
+ succeeded in 714ms:
+bash: line 1: rg: command not found
+/home/ec2-user/fjall
+
+ succeeded in 695ms:
+ M Cargo.toml
+?? examples/repro287.rs
+
+codex
+`rg` is not installed on the remote box, so I’m falling back to `grep`/`find`. The repo is already dirty in `Cargo.toml` and `examples/repro287.rs`; I’ll avoid touching those.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -RIn \"pub fn clear\\|start_ingestion\\|struct Ingestion\\|pub fn finish\" src crates 2>/dev/null | head -100'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'find . -maxdepth 3 -type f | sed \"s#"'^./##" | sort | head -200'"'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -RIn \"get_flush_lock\\|compaction_state\\|major_compaction\\|backpressure_lock\" src crates 2>/dev/null | head -200'" in /private/tmp
+ succeeded in 597ms:
+src/db.rs:642:            backpressure_lock: Mutex::default(),
+src/db.rs:883:            backpressure_lock: Mutex::default(),
+src/flush/worker.rs:22:    let flush_lock = task.keyspace.tree.get_flush_lock();
+src/supervisor.rs:35:    pub(crate) backpressure_lock: Mutex<()>,
+
+ succeeded in 608ms:
+src/flush/manager.rs:27:    pub fn clear(&self) {
+src/ingestion.rs:8:pub struct Ingestion<'a> {
+src/ingestion.rs:36:    pub fn finish(self) -> crate::Result<()> {
+src/keyspace/mod.rs:236:    pub fn clear(&self) -> crate::Result<()> {
+src/keyspace/mod.rs:295:    pub fn start_ingestion(&self) -> crate::Result<Ingestion<'_>> {
+src/keyspace/test.rs:12:        let mut ingest = items.start_ingestion()?;
+src/keyspace/test.rs:27:        let mut ingest = items.start_ingestion()?;
+src/keyspace/test.rs:42:        let mut ingest = items.start_ingestion()?;
+src/keyspace/test.rs:57:        let mut ingest = items.start_ingestion()?;
+
+ succeeded in 614ms:
+.config/nextest.toml
+.git/HEAD
+.git/config
+.git/description
+.git/hooks/applypatch-msg.sample
+.git/hooks/commit-msg.sample
+.git/hooks/fsmonitor-watchman.sample
+.git/hooks/post-update.sample
+.git/hooks/pre-applypatch.sample
+.git/hooks/pre-commit.sample
+.git/hooks/pre-merge-commit.sample
+.git/hooks/pre-push.sample
+.git/hooks/pre-rebase.sample
+.git/hooks/pre-receive.sample
+.git/hooks/prepare-commit-msg.sample
+.git/hooks/push-to-checkout.sample
+.git/hooks/sendemail-validate.sample
+.git/hooks/update.sample
+.git/index
+.git/info/exclude
+.git/logs/HEAD
+.git/packed-refs
+.github/FUNDING.yml
+.github/ISSUE_TEMPLATE/bug_report.md
+.github/ISSUE_TEMPLATE/feature_request.md
+.github/workflows/commit.yml
+.github/workflows/release.yml
+.github/workflows/test.yml
+.gitignore
+.rustfmt.toml
+.vscode/settings.json
+CHANGELOG.md
+CONTRIBUTING.md
+Cargo.lock
+Cargo.toml
+LICENSE-APACHE
+LICENSE-MIT
+README.md
+_typos.toml
+commit.nu
+compile_examples.mjs
+examples/actix-kv/.gitignore
+examples/actix-kv/Cargo.toml
+examples/actix-kv/README.md
+examples/axum-kv/.gitignore
+examples/axum-kv/Cargo.toml
+examples/axum-kv/README.md
+examples/basic/.run
+examples/basic/Cargo.toml
+examples/basic/README.md
+examples/migration-lazy/.run
+examples/migration-lazy/Cargo.toml
+examples/migration-lazy/README.md
+examples/permuterm/.run
+examples/permuterm/Cargo.toml
+examples/permuterm/README.md
+examples/repro287.rs
+examples/rolling-log/.run
+examples/rolling-log/Cargo.toml
+examples/rolling-log/README.md
+examples/secondary-index/.run
+examples/secondary-index/Cargo.toml
+examples/secondary-index/README.md
+examples/structured/.run
+examples/structured/Cargo.toml
+examples/structured/README.md
+examples/suffix-search/.run
+examples/suffix-search/Cargo.toml
+examples/suffix-search/README.md
+examples/suffix-search/english_words.txt
+examples/tokio/.run
+examples/tokio/Cargo.toml
+examples/tokio/README.md
+examples/triplestore/.gitignore
+examples/triplestore/.run
+examples/triplestore/Cargo.toml
+examples/triplestore/README.md
+examples/ttl-json/.run
+examples/ttl-json/Cargo.toml
+examples/ttl-json/README.md
+examples/tx-atomic-counter/.run
+examples/tx-atomic-counter/Cargo.toml
+examples/tx-atomic-counter/README.md
+examples/tx-cc/.run
+examples/tx-cc/Cargo.toml
+examples/tx-cc/README.md
+examples/tx-keyspace-move/.run
+examples/tx-keyspace-move/Cargo.toml
+examples/tx-keyspace-move/README.md
+examples/tx-mpmc-queue/.run
+examples/tx-mpmc-queue/Cargo.toml
+examples/tx-mpmc-queue/README.md
+examples/tx-ssi-atomic-counter/.run
+examples/tx-ssi-atomic-counter/Cargo.toml
+examples/tx-ssi-atomic-counter/README.md
+examples/tx-ssi-cc/.run
+examples/tx-ssi-cc/Cargo.toml
+examples/tx-ssi-cc/README.md
+examples/tx-ssi-keyspace-move/.run
+examples/tx-ssi-keyspace-move/Cargo.toml
+examples/tx-ssi-keyspace-move/README.md
+examples/tx-ssi-mpmc-queue/.run
+examples/tx-ssi-mpmc-queue/Cargo.toml
+examples/tx-ssi-mpmc-queue/README.md
+examples/unique-index/.run
+examples/unique-index/Cargo.toml
+examples/unique-index/README.md
+examples_disabled/migration/.run
+examples_disabled/migration/Cargo.toml
+examples_disabled/migration/README.md
+examples_disabled/tx-blob-cas/Cargo.toml
+examples_disabled/tx-blob-cas/README.md
+kawaii.png
+logo.png
+renovate.json
+src/batch/item.rs
+src/batch/mod.rs
+src/builder.rs
+src/compaction/mod.rs
+src/compaction/worker.rs
+src/db.rs
+src/db_config.rs
+src/db_test.rs
+src/drop.rs
+src/error.rs
+src/file.rs
+src/flush/manager.rs
+src/flush/mod.rs
+src/flush/task.rs
+src/flush/worker.rs
+src/guard.rs
+src/ingestion.rs
+src/iter.rs
+src/journal/batch_reader.rs
+src/journal/entry.rs
+src/journal/error.rs
+src/journal/manager.rs
+src/journal/mod.rs
+src/journal/reader.rs
+src/journal/recovery.rs
+src/journal/test.rs
+src/journal/writer.rs
+src/keyspace/mod.rs
+src/keyspace/name.rs
+src/keyspace/options.rs
+src/keyspace/test.rs
+src/keyspace/write_delay.rs
+src/lib.rs
+src/locked_file.rs
+src/meta_keyspace.rs
+src/path.rs
+src/poison_dart.rs
+src/readable.rs
+src/recovery.rs
+src/snapshot.rs
+src/snapshot_nonce.rs
+src/snapshot_tracker.rs
+src/stats.rs
+src/supervisor.rs
+src/tx/mod.rs
+src/tx/write_tx.rs
+src/version.rs
+src/worker_pool.rs
+src/write_buffer_manager.rs
+target/.rustc_info.json
+target/CACHEDIR.TAG
+target/release/.cargo-artifact-lock
+target/release/.cargo-build-lock
+target/release/.cargo-lock
+test_fixture/v1_keyspace/version
+test_fixture/v1_keyspace_corrupt_journal/version
+test_fixture/v2_keyspace/version
+test_fixture/v2_keyspace_corrupt_journal/version
+test_fixture/v2_sealed_journal_shenanigans/version
+tests/batch.rs
+tests/batch_recovery.rs
+tests/blob_kv_simple.rs
+tests/clear_dirty_read.rs
+tests/compaction_filter.rs
+tests/db_lock.rs
+tests/db_open.rs
+tests/fifo_dirty_read.rs
+tests/ingest_recovery.rs
+tests/journal_large_value.rs
+tests/keyspace_clear.rs
+tests/keyspace_iter_lifetime.rs
+tests/keyspace_recover.rs
+tests/keyspace_snapshot.rs
+tests/keyspace_v1_load_fixture.rs
+tests/keyspace_v2_load_fixture.rs
+tests/memtable_recover.rs
+tests/prefix_complex.rs
+tests/recover_from_different_folder.rs
+tests/recovery_journal_mac.rs
+tests/recovery_keyspaces_mac.rs
+tests/seqno_recovery.rs
+tests/tx_ryow.rs
+tests/tx_ryow_snapshot.rs
+tests/write_buffer_size.rs
+tests/write_during_read.rs
+
+codex
+I found the public `Keyspace::clear()` and `Ingestion::finish()` paths. Next I’m checking the exact lsm-tree type exposed through fjall so the fix can use existing locks instead of adding a disconnected mutex.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"1,360p\" src/keyspace/mod.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"1,120p\" src/flush/worker.rs && sed -n \"1,120p\" src/flush/manager.rs && sed -n \"1,120p\" src/supervisor.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"1,180p\" src/ingestion.rs'" in /private/tmp
+ succeeded in 832ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{worker_pool::WorkerMessage, Keyspace};
+use lsm_tree::{AnyIngestion, UserKey, UserValue};
+
+pub struct Ingestion<'a> {
+    keyspace: &'a Keyspace,
+    inner: AnyIngestion<'a>,
+}
+
+impl<'a> Ingestion<'a> {
+    pub fn new(keyspace: &'a Keyspace) -> crate::Result<Self> {
+        let inner = keyspace.tree.ingestion()?;
+        Ok(Self { keyspace, inner })
+    }
+
+    pub fn write<K: Into<UserKey>, V: Into<UserValue>>(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> crate::Result<()> {
+        self.inner.write(key, value).map_err(Into::into)
+    }
+
+    pub fn write_tombstone<K: Into<UserKey>>(&mut self, key: K) -> crate::Result<()> {
+        self.inner.write_tombstone(key).map_err(Into::into)
+    }
+
+    #[doc(hidden)]
+    pub fn write_weak_tombstone<K: Into<UserKey>>(&mut self, key: K) -> crate::Result<()> {
+        self.inner.write_weak_tombstone(key).map_err(Into::into)
+    }
+
+    pub fn finish(self) -> crate::Result<()> {
+        // NOTE: We hold to avoid a race condition with concurrent writes:
+        //
+        // write         ingest
+        // lock journal
+        // |
+        // next seqno=1
+        // |
+        // --------------finish
+        //                 flush
+        //                 seqno=2
+        //                 register
+        //                 |
+        // -----------------
+        // |
+        // insert seqno=1
+        let _journal_lock = self.keyspace.supervisor.journal.get_writer();
+
+        self.inner
+            .finish()
+            .inspect(|()| {
+                self.keyspace
+                    .worker_messager
+                    .try_send(WorkerMessage::Compact(self.keyspace.clone()))
+                    .ok();
+
+                self.keyspace.supervisor.snapshot_tracker.gc();
+            })
+            .map_err(Into::into)
+    }
+}
+
+ succeeded in 840ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+mod config;
+pub mod name;
+pub mod options;
+mod write_delay;
+
+#[cfg(test)]
+mod test;
+
+use crate::{
+    file::{KEYSPACES_FOLDER, LSM_CURRENT_VERSION_MARKER},
+    flush::Task as FlushTask,
+    ingestion::Ingestion,
+    locked_file::LockedFileGuard,
+    stats::Stats,
+    supervisor::Supervisor,
+    worker_pool::WorkerMessage,
+    Database, Guard, Iter,
+};
+use lsm_tree::{AbstractTree, AnyTree, SeqNo, UserKey, UserValue};
+use options::CreateOptions;
+use std::{
+    ops::RangeBounds,
+    path::Path,
+    sync::{atomic::AtomicBool, Arc, MutexGuard},
+    time::Duration,
+};
+use write_delay::perform_write_stall;
+
+/// Keyspace key (a.k.a. column family, locality group)
+pub type KeyspaceKey = byteview::StrView;
+
+pub type InternalKeyspaceId = u64;
+
+pub fn apply_to_base_config(
+    config: lsm_tree::Config,
+    our_config: &CreateOptions,
+) -> lsm_tree::Config {
+    config
+        // .level_count(our_config.level_count)
+        .data_block_size_policy(our_config.data_block_size_policy.clone())
+        .data_block_compression_policy(our_config.data_block_compression_policy.clone())
+        .index_block_compression_policy(our_config.index_block_compression_policy.clone())
+        .data_block_restart_interval_policy(our_config.data_block_restart_interval_policy.clone())
+        // .index_block_restart_interval_policy(our_config.index_block_restart_interval_policy.clone())
+        .filter_block_pinning_policy(our_config.filter_block_pinning_policy.clone())
+        .index_block_pinning_policy(our_config.index_block_pinning_policy.clone())
+        .data_block_hash_ratio_policy(our_config.data_block_hash_ratio_policy.clone())
+        .expect_point_read_hits(our_config.expect_point_read_hits)
+        .with_kv_separation(our_config.kv_separation_opts.clone())
+        .index_block_partitioning_policy(our_config.index_block_partitioning_policy.clone())
+        .filter_block_partitioning_policy(our_config.filter_block_partitioning_policy.clone())
+        .filter_policy(our_config.filter_policy.clone())
+        .with_compaction_filter_factory(our_config.compaction_filter_factory.clone())
+}
+
+pub struct KeyspaceInner {
+    /// Internal ID
+    pub(crate) id: InternalKeyspaceId,
+
+    // Internal
+    //
+    /// Keyspace name
+    pub(crate) name: KeyspaceKey,
+
+    // Keyspace configuration
+    #[doc(hidden)]
+    pub config: CreateOptions,
+
+    /// If `true`, the keyspace is marked as deleted
+    pub(crate) is_deleted: AtomicBool,
+
+    /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+    pub(crate) is_poisoned: Arc<AtomicBool>,
+
+    /// LSM-tree wrapper
+    #[doc(hidden)]
+    pub tree: AnyTree,
+
+    pub(crate) supervisor: Supervisor,
+
+    /// Database-level stats
+    pub(crate) stats: Arc<Stats>,
+
+    pub(crate) worker_messager: flume::Sender<WorkerMessage>,
+
+    #[expect(unused)]
+    lock_file: LockedFileGuard,
+}
+
+impl Drop for KeyspaceInner {
+    fn drop(&mut self) {
+        log::trace!("Dropping KeyspaceInner: {:?}", self.name);
+
+        if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
+            let path = &self.tree.tree_config().path;
+
+            // IMPORTANT: First, delete the manifest,
+            // once that is deleted, the keyspace is treated as uninitialized
+            // even if the .deleted marker is removed
+            //
+            // This is important, because if somehow `remove_dir_all` ends up
+            // deleting the `.deleted` marker first, we would end up resurrecting
+            // the keyspace
+            let manifest_file = path.join(LSM_CURRENT_VERSION_MARKER);
+
+            // TODO: use https://github.com/rust-lang/rust/issues/31436 if stable
+            #[expect(clippy::collapsible_else_if)]
+            match manifest_file.try_exists() {
+                Ok(exists) => {
+                    if exists {
+                        if let Err(e) = std::fs::remove_file(manifest_file) {
+                            log::error!(
+                                "Failed to cleanup keyspace manifest at {}: {e}",
+                                path.display(),
+                            );
+                        } else {
+                            if let Err(e) = std::fs::remove_dir_all(path) {
+                                log::error!(
+                                    "Failed to cleanup deleted keyspace's folder at {}: {e}",
+                                    path.display(),
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to cleanup keyspace manifest at {}: {e}",
+                        path.display(),
+                    );
+                }
+            }
+        }
+
+        #[cfg(feature = "__internal_whitebox")]
+        crate::drop::decrement_drop_counter();
+    }
+}
+
+/// Handle to a keyspace
+///
+/// Each keyspace is backed by an LSM-tree to provide a
+/// disk-backed search tree, and can be configured individually.
+///
+/// A keyspace generally only takes a little bit of memory and disk space,
+/// but does not spawn its own background threads.
+///
+/// As long as a handle to a keyspace is held, its folder is not cleaned up from disk
+/// in case it is deleted from another thread.
+#[derive(Clone)]
+#[doc(alias = "column family")]
+#[doc(alias = "locality group")]
+#[doc(alias = "table")]
+pub struct Keyspace(pub(crate) Arc<KeyspaceInner>);
+
+impl AsRef<Keyspace> for &Keyspace {
+    fn as_ref(&self) -> &Keyspace {
+        self
+    }
+}
+
+impl std::ops::Deref for Keyspace {
+    type Target = KeyspaceInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialEq for Keyspace {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Keyspace {}
+
+impl std::hash::Hash for Keyspace {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write(self.name.as_bytes());
+    }
+}
+
+impl Keyspace {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn id(&self) -> InternalKeyspaceId {
+        self.id
+    }
+
+    /// Returns the keyspace's name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!("default", &**tree.name());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    pub fn name(&self) -> &KeyspaceKey {
+        &self.name
+    }
+
+    /// Clears the entire keyspace in O(1) time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "a")?;
+    /// assert!(tree.contains_key("a")?);
+    ///
+    /// tree.clear()?;
+    /// assert!(!tree.contains_key("a")?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_clear(self.id, seqno)?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        self.tree.clear()?;
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        Ok(())
+    }
+
+    /// Returns the number of blob bytes on disk that are not referenced.
+    ///
+    /// These will be reclaimed over time by blob garbage collection automatically.
+    #[must_use]
+    pub fn fragmented_blob_bytes(&self) -> u64 {
+        self.tree.stale_blob_bytes()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn sealed_memtable_count(&self) -> usize {
+        self.tree.sealed_memtable_count()
+    }
+
+    /// Prepare ingestiom of a pre-sorted stream of key-value pairs into the keyspace.
+    ///
+    /// Prefer this method over singular inserts or write batches/transactions
+    /// for maximum bulk load speed.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input iterator is not sorted in ascending order.
+    pub fn start_ingestion(&self) -> crate::Result<Ingestion<'_>> {
+        Ingestion::new(self)
+    }
+
+    pub(crate) fn from_database(
+        keyspace_id: InternalKeyspaceId,
+        db: &Database,
+        tree: AnyTree,
+        name: KeyspaceKey,
+        config: CreateOptions,
+    ) -> Self {
+        Self(Arc::new(KeyspaceInner {
+            id: keyspace_id,
+            name,
+            tree,
+            config,
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            lock_file: db.lock_file.clone(),
+            stats: db.stats.clone(),
+        }))
+    }
+
+    /// Creates a new keyspace.
+    pub(crate) fn create_new(
+        keyspace_id: InternalKeyspaceId,
+        db: &Database,
+        name: KeyspaceKey,
+        config: CreateOptions,
+    ) -> crate::Result<Self> {
+        log::debug!("Creating keyspace {name:?}->{keyspace_id}");
+
+        let base_folder = db
+            .config
+            .path
+            .join(KEYSPACES_FOLDER)
+            .join(keyspace_id.to_string());
+
+        std::fs::create_dir_all(&base_folder)?;
+
+        let base_config = lsm_tree::Config::new(
+            base_folder,
+            db.supervisor.seqno.clone(),
+            db.supervisor.snapshot_tracker.get_ref(),
+        )
+        .use_descriptor_table(db.config.descriptor_table.clone())
+        .use_cache(db.config.cache.clone());
+
+        let base_config = apply_to_base_config(base_config, &config);
+        let tree = base_config.open()?;
+
+        Ok(Self(Arc::new(KeyspaceInner {
+            supervisor: db.supervisor.clone(),
+            worker_messager: db.worker_pool.sender.clone(),
+            id: keyspace_id,
+            name,
+            config,
+            tree,
+            is_deleted: AtomicBool::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            stats: db.stats.clone(),
+            lock_file: db.lock_file.clone(),
+        })))
+    }
+
+ succeeded in 842ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{
+    flush::Task, snapshot_tracker::SnapshotTracker, stats::Stats,
+    write_buffer_manager::WriteBufferManager,
+};
+use lsm_tree::AbstractTree;
+
+/// Runs flush logic.
+pub fn run(
+    task: &Task,
+    write_buffer_manager: &WriteBufferManager,
+    snapshot_tracker: &SnapshotTracker,
+    _stats: &Stats,
+) -> crate::Result<()> {
+    log::debug!("Flushing keyspace {:?}", task.keyspace.name);
+
+    let gc_watermark = snapshot_tracker.get_seqno_safe_to_gc();
+
+    let flush_lock = task.keyspace.tree.get_flush_lock();
+
+    match task
+        .keyspace
+        .tree
+        .flush(&flush_lock, gc_watermark)
+        .inspect_err(|e| {
+            log::error!("Flush error: {e:?}");
+        })? {
+        Some(flushed_bytes) => {
+            write_buffer_manager.free(flushed_bytes);
+
+            log::debug!("Flush completed");
+        }
+        None => {
+            log::trace!("Flush did not return a table");
+        }
+    }
+
+    Ok(())
+}
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::flush::Task;
+use std::sync::Arc;
+
+pub struct FlushManager {
+    sender: flume::Sender<Arc<Task>>,
+    receiver: flume::Receiver<Arc<Task>>,
+}
+
+impl FlushManager {
+    pub fn new() -> Self {
+        let (tx, rx) = flume::bounded(1_000);
+
+        Self {
+            sender: tx,
+            receiver: rx,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.receiver.len()
+    }
+
+    pub fn clear(&self) {
+        let _ = self.receiver.drain().count();
+    }
+
+    pub fn wait_for_empty(&self) {
+        while !self.receiver.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    pub fn enqueue(&self, task: Arc<Task>) {
+        self.sender.send(task).ok();
+    }
+
+    pub fn dequeue(&self) -> Option<Arc<Task>> {
+        self.receiver.try_recv().ok()
+    }
+}
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use lsm_tree::SequenceNumberCounter;
+
+use crate::{
+    db::Keyspaces,
+    flush::manager::FlushManager,
+    journal::{manager::JournalManager, Journal},
+    snapshot_tracker::SnapshotTracker,
+    write_buffer_manager::WriteBufferManager,
+};
+use std::sync::{Arc, Mutex, RwLock};
+
+pub struct SupervisorInner {
+    pub db_config: crate::Config,
+
+    /// Dictionary of all keyspaces
+    #[doc(hidden)]
+    pub keyspaces: Arc<RwLock<Keyspaces>>,
+
+    pub(crate) write_buffer_size: WriteBufferManager,
+    pub(crate) flush_manager: FlushManager,
+
+    pub seqno: SequenceNumberCounter,
+
+    pub snapshot_tracker: SnapshotTracker,
+
+    pub(crate) journal: Arc<Journal>,
+
+    /// Tracks journal size and garbage collects sealed journals when possible
+    pub(crate) journal_manager: Arc<RwLock<JournalManager>>,
+
+    pub(crate) backpressure_lock: Mutex<()>,
+}
+
+#[derive(Clone)]
+pub struct Supervisor(Arc<SupervisorInner>);
+
+impl std::ops::Deref for Supervisor {
+    type Target = SupervisorInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Supervisor {
+    pub fn new(inner: SupervisorInner) -> Self {
+        Self(Arc::new(inner))
+    }
+}
+
+codex
+`clear()` currently only orders itself through the journal, while flush workers take the tree flush lock. I’m checking whether fjall can reach lsm-tree’s compaction barrier; if not, I’ll add the narrowest fjall-level operation lock shared by clear, ingestion finish, and flush workers.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -RIn \"pub struct AnyTree\\|enum AnyTree\\|type AnyTree\\|fn get_flush_lock\\|pub fn get_flush_lock\\|compaction_state\" ~/.cargo/registry/src 2>/dev/null | head -200'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -RIn \"fn clear(&self)\" ~/.cargo/registry/src 2>/dev/null | grep lsm-tree | head -50'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -RIn \"struct Tree\\|pub(crate).*compaction_state\\|major_compaction_lock\\|get_major\" ~/.cargo/registry/src/*/lsm-tree-* 2>/dev/null | head -200'" in /private/tmp
+ succeeded in 716ms:
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/range.rs:76:    pub struct TreeIter {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/inner.rs:33:pub struct TreeInner {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/inner.rs:51:    pub(crate) compaction_state: Arc<Mutex<CompactionState>>,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/inner.rs:62:    /// Minor compactions use `major_compaction_lock.read()` instead, so they
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/inner.rs:64:    pub(crate) major_compaction_lock: RwLock<()>,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/inner.rs:94:            major_compaction_lock: RwLock::default(),
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:77:pub struct Tree(#[doc(hidden)] pub Arc<TreeInner>);
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:256:            .major_compaction_lock
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:290:            .major_compaction_lock
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:516:            .major_compaction_lock
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:979:            major_compaction_lock: RwLock::default(),
+
+ succeeded in 865ms:
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/abstract_tree.rs:176:    fn clear(&self) -> crate::Result<()>;
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/mod.rs:272:    fn clear(&self) -> crate::Result<()> {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:264:    fn clear(&self) -> crate::Result<()> {
+
+ succeeded in 970ms:
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/abstract_tree.rs:209:    fn get_flush_lock(&self) -> MutexGuard<'_, ()>;
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/any_tree.rs:11:pub enum AnyTree {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/ingest.rs:200:        let mut _compaction_state = index.compaction_state.lock().expect("lock is poisoned");
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/mod.rs:346:    fn get_flush_lock(&self) -> MutexGuard<'_, ()> {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/state/mod.rs:71:        //     tree.compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/state/mod.rs:80:            .compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:61:    pub compaction_state: Arc<Mutex<CompactionState>>,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:81:            compaction_state: tree.compaction_state.clone(),
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:94:    let compaction_state = opts.compaction_state.lock().expect("lock is poisoned");
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:107:        &compaction_state,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:114:            merge_tables(compaction_state, version_history_lock, opts, &payload)
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:119:            move_tables(&compaction_state, opts, &payload)
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:125:                compaction_state,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:185:    compaction_state: &MutexGuard<'_, CompactionState>,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:193:    if compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:320:        let mut compaction_state = opts.compaction_state.lock().expect("lock is poisoned");
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:322:        compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:330:    mut compaction_state: MutexGuard<'_, CompactionState>,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:341:    if compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:478:        compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:484:    drop(compaction_state);
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:506:    let mut compaction_state = opts.compaction_state.lock().expect("lock is poisoned");
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:523:            compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:543:            compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:548:    compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:559:    drop(compaction_state);
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:567:    compaction_state: MutexGuard<'_, CompactionState>,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:575:    if compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/compaction/worker.rs:643:    drop(compaction_state);
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/ingest.rs:274:        let mut _compaction_state = self.tree.compaction_state.lock().expect("lock is poisoned");
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/inner.rs:51:    pub(crate) compaction_state: Arc<Mutex<CompactionState>>,
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/inner.rs:96:            compaction_state: Arc::new(Mutex::new(CompactionState::default())),
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:177:    fn get_flush_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:449:        let mut _compaction_state = self.compaction_state.lock().expect("lock is poisoned");
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:833:            .compaction_state
+/home/ec2-user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs:981:            compaction_state: Arc::new(Mutex::new(CompactionState::default())),
+
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"1,260p\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/abstract_tree.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"1,380p\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/any_tree.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"240,320p\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/tree/mod.rs && sed -n \"250,310p\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lsm-tree-3.1.5/src/blob_tree/mod.rs'" in /private/tmp
+ succeeded in 793ms:
+            .sum()
+    }
+
+    fn drop_range<K: AsRef<[u8]>, R: RangeBounds<K>>(&self, range: R) -> crate::Result<()> {
+        let (bounds, is_empty) = Self::range_bounds_to_owned_bounds(&range);
+
+        if is_empty {
+            return Ok(());
+        }
+
+        let strategy = Arc::new(crate::compaction::drop_range::Strategy::new(bounds));
+
+        // IMPORTANT: Write lock so we can be the only compaction going on
+        #[expect(clippy::expect_used, reason = "lock is expected to not be poisoned")]
+        let _lock = self
+            .0
+            .major_compaction_lock
+            .write()
+            .expect("lock is poisoned");
+
+        log::info!("Starting drop_range compaction");
+        self.inner_compact(strategy, 0)
+    }
+
+    fn clear(&self) -> crate::Result<()> {
+        let config = self.tree_config();
+        let mut versions = self.get_version_history_lock();
+
+        versions.upgrade_version(
+            &config.path,
+            |v| {
+                let mut copy = v.clone();
+                copy.active_memtable = Arc::new(Memtable::new(self.memtable_id_counter.next()));
+                copy.sealed_memtables = Arc::default();
+                copy.version = Version::new(v.version.id() + 1, self.tree_type());
+                Ok(copy)
+            },
+            &config.seqno,
+            &config.visible_seqno,
+        )
+    }
+
+    #[doc(hidden)]
+    fn major_compact(&self, target_size: u64, seqno_threshold: SeqNo) -> crate::Result<()> {
+        let strategy = Arc::new(crate::compaction::major::Strategy::new(target_size));
+
+        // IMPORTANT: Write lock so we can be the only compaction going on
+        #[expect(clippy::expect_used, reason = "lock is expected to not be poisoned")]
+        let _lock = self
+            .0
+            .major_compaction_lock
+            .write()
+            .expect("lock is poisoned");
+
+        log::info!("Starting major compaction");
+        self.inner_compact(strategy, seqno_threshold)
+    }
+
+    fn l0_run_count(&self) -> usize {
+        self.current_version()
+            .level(0)
+            .map(|x| x.run_count())
+            .unwrap_or_default()
+    }
+
+    fn size_of<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<u32>> {
+        #[expect(clippy::cast_possible_truncation, reason = "values are u32 length max")]
+        Ok(self.get(key, seqno)?.map(|x| x.len() as u32))
+    }
+
+    fn filter_size(&self) -> u64 {
+        self.current_version()
+            .iter_tables()
+            .map(Table::filter_size)
+            .map(u64::from)
+            .sum()
+    }
+
+    fn pinned_filter_size(&self) -> usize {
+        self.current_version()
+            .iter_tables()
+                    })
+                },
+            ),
+        )
+    }
+
+    fn tombstone_count(&self) -> u64 {
+        self.index.tombstone_count()
+    }
+
+    fn weak_tombstone_count(&self) -> u64 {
+        self.index.weak_tombstone_count()
+    }
+
+    fn weak_tombstone_reclaimable_count(&self) -> u64 {
+        self.index.weak_tombstone_reclaimable_count()
+    }
+
+    fn drop_range<K: AsRef<[u8]>, R: RangeBounds<K>>(&self, range: R) -> crate::Result<()> {
+        self.index.drop_range(range)
+    }
+
+    fn clear(&self) -> crate::Result<()> {
+        let config = self.tree_config();
+        let mut versions = self.get_version_history_lock();
+
+        versions.upgrade_version(
+            &config.path,
+            |v| {
+                let mut copy = v.clone();
+                copy.active_memtable =
+                    Arc::new(Memtable::new(self.index.memtable_id_counter.next()));
+                copy.sealed_memtables = Arc::default();
+                copy.version = Version::new(v.version.id() + 1, self.tree_type());
+                Ok(copy)
+            },
+            &config.seqno,
+            &config.visible_seqno,
+        )
+    }
+
+    fn major_compact(&self, target_size: u64, seqno_threshold: SeqNo) -> crate::Result<()> {
+        self.index.major_compact(target_size, seqno_threshold)
+    }
+
+    fn clear_active_memtable(&self) {
+        self.index.clear_active_memtable();
+    }
+
+    fn l0_run_count(&self) -> usize {
+        self.index.l0_run_count()
+    }
+
+    fn blob_file_count(&self) -> usize {
+        self.current_version().blob_file_count()
+    }
+
+    // NOTE: We skip reading from the value log
+    // because the vHandles already store the value size
+    fn size_of<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<u32>> {
+        let Some(item) = self.index.get_internal_entry(key.as_ref(), seqno)? else {
+
+ succeeded in 827ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{
+    iter_guard::IterGuardImpl, table::Table, version::Version, vlog::BlobFile, AnyTree, BlobTree,
+    Config, Guard, InternalValue, KvPair, Memtable, SeqNo, TableId, Tree, UserKey, UserValue,
+};
+use std::{
+    ops::RangeBounds,
+    sync::{Arc, MutexGuard, RwLockWriteGuard},
+};
+
+pub type RangeItem = crate::Result<KvPair>;
+
+type FlushToTablesResult = (Vec<Table>, Option<Vec<BlobFile>>);
+
+/// Generic Tree API
+#[enum_dispatch::enum_dispatch]
+pub trait AbstractTree {
+    /// Debug method for tracing the MVCC history of a key.
+    #[doc(hidden)]
+    fn print_trace(&self, key: &[u8]) -> crate::Result<()>;
+
+    /// Returns the number of cached table file descriptors.
+    fn table_file_cache_size(&self) -> usize;
+
+    // TODO: remove
+    #[doc(hidden)]
+    fn version_memtable_size_sum(&self) -> u64 {
+        self.get_version_history_lock().memtable_size_sum()
+    }
+
+    #[doc(hidden)]
+    fn next_table_id(&self) -> TableId;
+
+    #[doc(hidden)]
+    fn id(&self) -> crate::TreeId;
+
+    /// Like [`AbstractTree::get`], but returns the actual internal entry, not just the user value.
+    ///
+    /// Used in tests.
+    #[doc(hidden)]
+    fn get_internal_entry(&self, key: &[u8], seqno: SeqNo) -> crate::Result<Option<InternalValue>>;
+
+    #[doc(hidden)]
+    fn current_version(&self) -> Version;
+
+    #[doc(hidden)]
+    fn get_version_history_lock(&self) -> RwLockWriteGuard<'_, crate::version::SuperVersions>;
+
+    /// Seals the active memtable and flushes to table(s).
+    ///
+    /// If there are already other sealed memtables lined up, those will be flushed as well.
+    ///
+    /// Only used in tests.
+    #[doc(hidden)]
+    fn flush_active_memtable(&self, eviction_seqno: SeqNo) -> crate::Result<()> {
+        let lock = self.get_flush_lock();
+        self.rotate_memtable();
+        self.flush(&lock, eviction_seqno)?;
+        Ok(())
+    }
+
+    /// Synchronously flushes pending sealed memtables to tables.
+    ///
+    /// Returns the sum of flushed memtable sizes that were flushed.
+    ///
+    /// The function may not return a result, if nothing was flushed.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    fn flush(
+        &self,
+        _lock: &MutexGuard<'_, ()>,
+        seqno_threshold: SeqNo,
+    ) -> crate::Result<Option<u64>> {
+        use crate::{compaction::stream::CompactionStream, merge::Merger};
+
+        let version_history = self.get_version_history_lock();
+        let latest = version_history.latest_version();
+
+        if latest.sealed_memtables.len() == 0 {
+            return Ok(None);
+        }
+
+        let sealed_ids = latest
+            .sealed_memtables
+            .iter()
+            .map(|mt| mt.id)
+            .collect::<Vec<_>>();
+
+        let flushed_size = latest.sealed_memtables.iter().map(|mt| mt.size()).sum();
+
+        let merger = Merger::new(
+            latest
+                .sealed_memtables
+                .iter()
+                .map(|mt| mt.iter().map(Ok))
+                .collect::<Vec<_>>(),
+        );
+        let stream = CompactionStream::new(merger, seqno_threshold);
+
+        drop(version_history);
+
+        if let Some((tables, blob_files)) = self.flush_to_tables(stream)? {
+            self.register_tables(
+                &tables,
+                blob_files.as_deref(),
+                None,
+                &sealed_ids,
+                seqno_threshold,
+            )?;
+        }
+
+        Ok(Some(flushed_size))
+    }
+
+    /// Returns an iterator that scans through the entire tree.
+    ///
+    /// Avoid using this function, or limit it as otherwise it may scan a lot of items.
+    fn iter(
+        &self,
+        seqno: SeqNo,
+        index: Option<(Arc<Memtable>, SeqNo)>,
+    ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static> {
+        self.range::<&[u8], _>(.., seqno, index)
+    }
+
+    /// Returns an iterator over a prefixed set of items.
+    ///
+    /// Avoid using an empty prefix as it may scan a lot of items (unless limited).
+    fn prefix<K: AsRef<[u8]>>(
+        &self,
+        prefix: K,
+        seqno: SeqNo,
+        index: Option<(Arc<Memtable>, SeqNo)>,
+    ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static>;
+
+    /// Returns an iterator over a range of items.
+    ///
+    /// Avoid using full or unbounded ranges as they may scan a lot of items (unless limited).
+    fn range<K: AsRef<[u8]>, R: RangeBounds<K>>(
+        &self,
+        range: R,
+        seqno: SeqNo,
+        index: Option<(Arc<Memtable>, SeqNo)>,
+    ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static>;
+
+    /// Returns the approximate number of tombstones in the tree.
+    fn tombstone_count(&self) -> u64;
+
+    /// Returns the approximate number of weak tombstones (single deletes) in the tree.
+    fn weak_tombstone_count(&self) -> u64;
+
+    /// Returns the approximate number of values reclaimable once weak tombstones can be GC'd.
+    fn weak_tombstone_reclaimable_count(&self) -> u64;
+
+    /// Drops tables that are fully contained in a given range.
+    ///
+    /// Accepts any `RangeBounds`, including unbounded or exclusive endpoints.
+    /// If the normalized lower bound is greater than the upper bound, the
+    /// method returns without performing any work.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` only if an IO error occurs.
+    fn drop_range<K: AsRef<[u8]>, R: RangeBounds<K>>(&self, range: R) -> crate::Result<()>;
+
+    /// Drops all tables and clears all memtables atomically.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` only if an IO error occurs.
+    fn clear(&self) -> crate::Result<()>;
+
+    /// Performs major compaction, blocking the caller until it's done.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    fn major_compact(&self, target_size: u64, seqno_threshold: SeqNo) -> crate::Result<()>;
+
+    /// Returns the disk space used by stale blobs.
+    fn stale_blob_bytes(&self) -> u64 {
+        0
+    }
+
+    /// Gets the disk space usage of all filters in the tree.
+    ///
+    /// May not correspond to the actual memory size because filter blocks may be paged out.
+    fn filter_size(&self) -> u64;
+
+    /// Gets the memory usage of all pinned filters in the tree.
+    fn pinned_filter_size(&self) -> usize;
+
+    /// Gets the memory usage of all pinned index blocks in the tree.
+    fn pinned_block_index_size(&self) -> usize;
+
+    /// Gets the length of the version free list.
+    fn version_free_list_len(&self) -> usize;
+
+    /// Returns the metrics structure.
+    #[cfg(feature = "metrics")]
+    fn metrics(&self) -> &Arc<crate::Metrics>;
+
+    /// Acquires the flush lock which is required to call [`Tree::flush`].
+    fn get_flush_lock(&self) -> MutexGuard<'_, ()>;
+
+    /// Synchronously flushes a memtable to a table.
+    ///
+    /// This method will not make the table immediately available,
+    /// use [`AbstractTree::register_tables`] for that.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    #[warn(clippy::type_complexity)]
+    fn flush_to_tables(
+        &self,
+        stream: impl Iterator<Item = crate::Result<InternalValue>>,
+    ) -> crate::Result<Option<FlushToTablesResult>>;
+
+    /// Atomically registers flushed tables into the tree, removing their associated sealed memtables.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    fn register_tables(
+        &self,
+        tables: &[Table],
+        blob_files: Option<&[BlobFile]>,
+        frag_map: Option<crate::blob_tree::FragmentationMap>,
+        sealed_memtables_to_delete: &[crate::tree::inner::MemtableId],
+        gc_watermark: SeqNo,
+    ) -> crate::Result<()>;
+
+    /// Clears the active memtable atomically.
+    fn clear_active_memtable(&self);
+
+    /// Returns the number of sealed memtables.
+    fn sealed_memtable_count(&self) -> usize;
+
+    /// Performs compaction on the tree's levels, blocking the caller until it's done.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    fn compact(
+        &self,
+        strategy: Arc<dyn crate::compaction::CompactionStrategy>,
+        seqno_threshold: SeqNo,
+    ) -> crate::Result<()>;
+
+    /// Returns the next table's ID.
+    fn get_next_table_id(&self) -> TableId;
+
+    /// Returns the tree config.
+    fn tree_config(&self) -> &Config;
+
+ succeeded in 845ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{BlobTree, Tree};
+use enum_dispatch::enum_dispatch;
+
+/// May be a standard [`Tree`] or a [`BlobTree`]
+#[derive(Clone)]
+#[enum_dispatch(AbstractTree)]
+pub enum AnyTree {
+    /// Standard LSM-tree, see [`Tree`]
+    Standard(Tree),
+
+    /// Key-value separated LSM-tree, see [`BlobTree`]
+    Blob(BlobTree),
+}
+
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"1,220p\" src/compaction/worker.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -RIn \"\\.compact\\|major_compact\\|WorkerMessage::Compact\\|Compact(\" src 2>/dev/null | head -200'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"1,180p\" src/worker_pool.rs'" in /private/tmp
+ succeeded in 617ms:
+src/builder.rs:187:        self.inner.compaction_filter_factory_assigner = Some(f);
+src/compaction/worker.rs:26:    let strategy = keyspace.config.compaction_strategy.clone();
+src/compaction/worker.rs:36:        .compact(strategy.clone(), snapshot_tracker.get_seqno_safe_to_gc())
+src/compaction/worker.rs:57:    stats.compactions_completed.fetch_add(1, Relaxed);
+src/db.rs:262:            .compactions_completed
+src/db.rs:472:                .compaction_filter_factory_assigner
+src/ingestion.rs:59:                    .try_send(WorkerMessage::Compact(self.keyspace.clone()))
+src/keyspace/mod.rs:57:        .with_compaction_filter_factory(our_config.compaction_filter_factory.clone())
+src/keyspace/mod.rs:868:    pub fn major_compact(&self) -> crate::Result<()> {
+src/keyspace/mod.rs:869:        self.tree.major_compact(
+src/keyspace/options.rs:147:        self.compaction_filter_factory = Some(factory);
+src/keyspace/options.rs:386:                (key, self.compaction_strategy.get_name().into())
+src/keyspace/options.rs:469:        match self.compaction_strategy.get_name() {
+src/keyspace/options.rs:472:                    self.compaction_strategy
+src/keyspace/options.rs:636:        self.compaction_strategy = compaction_strategy;
+src/meta_keyspace.rs:68:            .compact(
+src/recovery.rs:81:            .compaction_filter_factory_assigner
+src/worker_pool.rs:19:    Compact(Keyspace),
+src/worker_pool.rs:31:                Self::Compact(k) => Cow::Owned(format!("WorkerMessage:Compact({:?})", k.name)),
+src/worker_pool.rs:209:                    .try_send(WorkerMessage::Compact(task.keyspace.clone()))
+src/worker_pool.rs:219:        WorkerMessage::Compact(keyspace) => {
+src/worker_pool.rs:224:                ctx.sender.send(WorkerMessage::Compact(keyspace)).ok();
+
+ succeeded in 594ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{
+    compaction::worker::run as run_compaction, flush::worker::run as run_flush,
+    journal::manager::EvictionWatermark, poison_dart::PoisonDart, stats::Stats,
+    supervisor::Supervisor, Keyspace,
+};
+use lsm_tree::{AbstractTree, MemtableId};
+use std::{
+    borrow::Cow,
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+    thread::JoinHandle,
+};
+
+pub enum WorkerMessage {
+    Flush,
+    Compact(Keyspace),
+    Close,
+    RotateMemtable(Keyspace, MemtableId),
+}
+
+impl std::fmt::Debug for WorkerMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Flush => Cow::Borrowed("WorkerMessage:Flush"),
+                Self::Compact(k) => Cow::Owned(format!("WorkerMessage:Compact({:?})", k.name)),
+                Self::Close => Cow::Borrowed("WorkerMessage:Close"),
+                Self::RotateMemtable(k, memtable_id) =>
+                    Cow::Owned(format!("WorkerMessage:Rotate({:?}, {memtable_id})", k.name)),
+            }
+        )
+    }
+}
+
+type WorkerHandle = JoinHandle<Result<(), crate::Error>>;
+
+pub struct WorkerPool {
+    thread_handles: Mutex<Vec<WorkerHandle>>,
+    pub(crate) rx: flume::Receiver<WorkerMessage>,
+    pub(crate) sender: flume::Sender<WorkerMessage>,
+}
+
+impl WorkerPool {
+    pub fn prepare() -> Self {
+        let (sender, rx) = flume::bounded(1_000);
+
+        Self {
+            thread_handles: Mutex::default(),
+            rx,
+            sender,
+        }
+    }
+
+    pub fn start(
+        &self,
+        pool_size: usize,
+        supervisor: &Supervisor,
+        stats: &Arc<Stats>,
+        poison_dart: &PoisonDart,
+        thread_counter: &Arc<AtomicUsize>,
+    ) -> crate::Result<()> {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        log::debug!("Starting worker pool with {pool_size} threads");
+
+        thread_counter.fetch_add(pool_size, Relaxed);
+
+        let thread_handles = (0..pool_size)
+            .map(|i| {
+                std::thread::Builder::new()
+                    .name("fjall:worker".to_string())
+                    .spawn({
+                        log::trace!("Starting fjall worker thread #{i}");
+
+                        let worker_state = WorkerState {
+                            pool_size,
+                            worker_id: i,
+                            rx: self.rx.clone(),
+                            supervisor: supervisor.clone(),
+                            stats: stats.clone(),
+                            sender: self.sender.clone(),
+                        };
+
+                        let thread_counter = thread_counter.clone();
+                        let poison_dart = poison_dart.clone();
+
+                        move || loop {
+                            match worker_tick(&worker_state) {
+                                Ok(should_abort) => {
+                                    if should_abort {
+                                        log::debug!("Worker #{i} closes because DB is dropping");
+                                        thread_counter.fetch_sub(1, Relaxed);
+                                        return Ok(());
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Worker #{i} crashed: {e:?}");
+                                    poison_dart.poison();
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    })
+                    .inspect_err(|_| {
+                        thread_counter.fetch_sub(1, Relaxed);
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+
+        *self.thread_handles.lock().expect("lock is poisoned") = thread_handles;
+
+        Ok(())
+    }
+}
+
+struct WorkerState {
+    pool_size: usize,
+    worker_id: usize,
+    supervisor: Supervisor,
+    rx: flume::Receiver<WorkerMessage>,
+    sender: flume::Sender<WorkerMessage>,
+    stats: Arc<Stats>,
+}
+
+fn worker_tick(ctx: &WorkerState) -> crate::Result<bool> {
+    let Ok(item) = ctx.rx.recv() else {
+        return Ok(true);
+    };
+
+    log::trace!("Worker #{} got message: {item:?}", ctx.worker_id);
+
+    match item {
+        WorkerMessage::Close => {
+            return Ok(true);
+        }
+        WorkerMessage::RotateMemtable(keyspace, memtable_id) => {
+            log::trace!("acquiring journal lock");
+            let journal_writer = keyspace.supervisor.journal.get_writer();
+            keyspace.inner_rotate_memtable(journal_writer, memtable_id)?;
+        }
+        WorkerMessage::Flush => {
+            let Some(task) = ctx.supervisor.flush_manager.dequeue() else {
+                return Ok(false);
+            };
+
+            {
+                log::trace!("acquiring journal lock to maybe rotate journal");
+                let mut journal_writer = ctx.supervisor.journal.get_writer();
+
+                if journal_writer.pos()? > 64_000_000 {
+                    #[expect(clippy::expect_used)]
+                    let mut journal_manager = ctx
+                        .supervisor
+                        .journal_manager
+                        .write()
+                        .expect("lock is poisoned");
+
+                    let seqno_map = {
+                        #[expect(clippy::expect_used)]
+                        let keyspaces = ctx.supervisor.keyspaces.write().expect("lock is poisoned");
+
+                        let mut seqnos = Vec::with_capacity(keyspaces.len());
+
+                        for keyspace in keyspaces.values() {
+                            if let Some(lsn) = keyspace.tree.get_highest_memtable_seqno() {
+                                seqnos.push(EvictionWatermark {
+                                    lsn,
+                                    keyspace: keyspace.clone(),
+                                });
+                            }
+                        }
+
+                        seqnos
+                    };
+
+
+ succeeded in 626ms:
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{snapshot_tracker::SnapshotTracker, stats::Stats, Keyspace};
+use lsm_tree::AbstractTree;
+use std::time::Instant;
+
+/// Runs a single run of compaction.
+pub fn run(
+    keyspace: &Keyspace,
+    snapshot_tracker: &SnapshotTracker,
+    stats: &Stats,
+) -> crate::Result<()> {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    if keyspace.is_deleted.load(Relaxed) {
+        return Ok(());
+    }
+
+    log::trace!(
+        "Checking compaction strategy for keyspace {:?}",
+        keyspace.name,
+    );
+
+    let strategy = keyspace.config.compaction_strategy.clone();
+
+    stats.active_compaction_count.fetch_add(1, Relaxed);
+
+    log::debug!("Compacting keyspace {:?}", keyspace.name);
+
+    let start = Instant::now();
+
+    if let Err(e) = keyspace
+        .tree
+        .compact(strategy.clone(), snapshot_tracker.get_seqno_safe_to_gc())
+    {
+        log::error!("Compaction failed: {e:?}");
+        stats.active_compaction_count.fetch_sub(1, Relaxed);
+
+        return Err(e.into());
+    }
+
+    // TODO: we need feedback from the compaction strategy...
+    // TODO: if there is nothing more to do, we should clear the compaction_manager semaphore
+
+    // NOTE: Throttle a bit to avoid a storm of compaction choice attempts
+    // (in case of write throttling)
+    std::thread::sleep(std::time::Duration::from_millis(1));
+
+    #[expect(clippy::cast_possible_truncation)]
+    stats
+        .time_compacting
+        .fetch_add(start.elapsed().as_micros() as u64, Relaxed);
+
+    stats.active_compaction_count.fetch_sub(1, Relaxed);
+    stats.compactions_completed.fetch_add(1, Relaxed);
+
+    Ok(())
+}
+
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"180,280p\" src/worker_pool.rs && sed -n \"820,900p\" src/keyspace/mod.rs && sed -n \"1,120p\" src/meta_keyspace.rs'" in /private/tmp
+ succeeded in 635ms:
+
+                    journal_manager.rotate_journal(&mut journal_writer, seqno_map)?;
+
+                    if journal_manager.disk_space_used()
+                        >= ctx.supervisor.db_config.max_journaling_size_in_bytes
+                    {
+                        let stragglers =
+                            journal_manager.get_keyspaces_to_flush_for_oldest_journal_eviction();
+
+                        for keyspace in stragglers {
+                            log::info!(
+                                "Rotating {:?} to try to reduce journal size",
+                                keyspace.name,
+                            );
+                            keyspace.request_rotation();
+                        }
+                    }
+                }
+            }
+
+            run_flush(
+                &task,
+                &ctx.supervisor.write_buffer_size,
+                &ctx.supervisor.snapshot_tracker,
+                &ctx.stats,
+            )?;
+
+            for _ in 0..ctx.pool_size {
+                ctx.sender
+                    .try_send(WorkerMessage::Compact(task.keyspace.clone()))
+                    .ok();
+            }
+
+            ctx.supervisor
+                .journal_manager
+                .write()
+                .expect("lock is poisoned")
+                .maintenance()?;
+        }
+        WorkerMessage::Compact(keyspace) => {
+            // NOTE: Let one worker prioritize flushing if there are pending flushes
+            //
+            // Disable when only 1 worker exists to avoid deadlock
+            if ctx.pool_size > 1 && ctx.worker_id == 0 {
+                ctx.sender.send(WorkerMessage::Compact(keyspace)).ok();
+                return Ok(false);
+            }
+
+            run_compaction(&keyspace, &ctx.supervisor.snapshot_tracker, &ctx.stats)?;
+        }
+    }
+
+    Ok(false)
+}
+        let latest_version = lock.latest_version();
+        let active_memtable = &latest_version.active_memtable;
+
+        self.worker_messager
+            .try_send(WorkerMessage::RotateMemtable(
+                self.clone(),
+                active_memtable.id(),
+            ))
+            .ok();
+    }
+
+    pub(crate) fn check_memtable_rotate(&self, size: u64) {
+        if size > self.config.max_memtable_size {
+            self.request_rotation();
+        }
+    }
+
+    fn maintenance(&self, memtable_size: u64) {
+        self.check_memtable_rotate(memtable_size);
+        self.local_backpressure();
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn l0_table_count(&self) -> usize {
+        self.tree.level_table_count(0).unwrap_or_default()
+    }
+
+    /// Number of tables (a.k.a. SST files) in the LSM-tree.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn table_count(&self) -> usize {
+        self.tree.table_count()
+    }
+
+    /// Number of blob files in the LSM-tree.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn blob_file_count(&self) -> usize {
+        self.tree.blob_file_count()
+    }
+
+    /// Performs major compaction, blocking the caller until it's done.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    #[doc(hidden)]
+    pub fn major_compact(&self) -> crate::Result<()> {
+        self.tree.major_compact(
+            64_000_000,
+            self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+        )?;
+
+        // TODO: 3.0.0 ----^
+        // compaction strategy needs a method: strategy.table_target_size()
+
+        Ok(())
+    }
+
+    /// Inserts a key-value pair into the keyspace.
+    ///
+    /// Keys may be up to 65536 bytes long, values up to 2^32 bytes.
+    /// Shorter keys and values result in better performance.
+    ///
+    /// If the key already exists, the item will be overwritten.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    ///
+    /// assert!(!tree.is_empty()?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use crate::{db::Keyspaces, keyspace::InternalKeyspaceId, Keyspace};
+use byteview::StrView;
+use lsm_tree::{AbstractTree, AnyTree, SeqNo, SequenceNumberCounter, UserValue};
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
+
+pub fn encode_config_key(
+    keyspace_id: InternalKeyspaceId,
+    name: impl AsRef<[u8]>,
+) -> crate::UserKey {
+    let mut key: Vec<u8> =
+        Vec::with_capacity(std::mem::size_of::<InternalKeyspaceId>() + 1 + name.as_ref().len());
+    key.push(b'c');
+    key.extend(keyspace_id.to_be_bytes());
+    key.extend(name.as_ref());
+    key.into()
+}
+
+/// The meta keyspace keeps mappings of keyspace names to their internal IDs and configurations
+///
+/// The meta keyspace is always keyspace #0.
+#[derive(Clone)]
+pub struct MetaKeyspace {
+    inner: AnyTree,
+
+    /// Dictionary of all keyspaces
+    #[doc(hidden)]
+    pub keyspaces: Arc<RwLock<Keyspaces>>,
+
+    seqno_generator: SequenceNumberCounter,
+    visible_seqno: SequenceNumberCounter,
+}
+
+impl MetaKeyspace {
+    pub(crate) fn new(
+        inner: AnyTree,
+        keyspaces: Arc<RwLock<Keyspaces>>,
+        seqno_generator: SequenceNumberCounter,
+        visible_seqno: SequenceNumberCounter,
+    ) -> Self {
+        Self {
+            inner,
+            keyspaces,
+            seqno_generator,
+            visible_seqno,
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> crate::Result<usize> {
+        self.inner.len(SeqNo::MAX, None).map_err(Into::into)
+    }
+
+    pub(crate) fn get_kv_for_config(
+        &self,
+        keyspace_id: InternalKeyspaceId,
+        name: &str,
+    ) -> crate::Result<Option<UserValue>> {
+        let key = encode_config_key(keyspace_id, name);
+        self.inner.get(key, SeqNo::MAX).map_err(Into::into)
+    }
+
+    fn maintenance(&self) -> crate::Result<()> {
+        self.inner
+            .compact(
+                Arc::new(
+                    crate::compaction::Leveled::default()
+                        .with_l0_threshold(2)
+                        .with_level_ratio_policy(vec![20.0]),
+                ),
+                0,
+            )
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn create_keyspace(
+        &self,
+        keyspace_id: InternalKeyspaceId,
+        name: &str,
+        keyspace: Keyspace,
+        mut keyspaces: RwLockWriteGuard<'_, Keyspaces>,
+    ) -> crate::Result<()> {
+        let mut kvs = keyspace.config.encode_kvs(keyspace_id);
+
+        kvs.push({
+            let mut key: Vec<u8> =
+                Vec::with_capacity(std::mem::size_of::<InternalKeyspaceId>() + 1);
+            key.push(b'n');
+            key.extend(keyspace_id.to_be_bytes());
+
+            let value = UserValue::new(name.as_bytes());
+
+            (key.into(), value)
+        });
+
+        kvs.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                kvs.is_sorted_by_key(|(k, _)| k),
+                "config KVs need to be sorted by key",
+            );
+        }
+
+        let mut ingestion = self.inner.ingestion()?;
+
+        for kv in kvs {
+            ingestion.write(kv.0, kv.1)?;
+        }
+
+        ingestion.finish()?;
+
+        keyspaces.insert(name.into(), keyspace);
+
+        self.maintenance()
+            .inspect_err(|e| {
+
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -n \"inner_rotate_memtable\\|request_rotation\\|get_writer\\|insert\\|write_batch\" -n src/keyspace/mod.rs | head -100'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"360,820p\" src/keyspace/mod.rs'" in /private/tmp
+ succeeded in 647ms:
+224:    /// tree.insert("a", "a")?;
+239:        let mut journal_writer = self.supervisor.journal.get_writer();
+285:    /// Prefer this method over singular inserts or write batches/transactions
+410:    /// tree.insert("a", "abc")?;
+411:    /// tree.insert("f", "abc")?;
+412:    /// tree.insert("g", "abc")?;
+437:    /// tree.insert("a", "abc")?;
+438:    /// tree.insert("f", "abc")?;
+439:    /// tree.insert("g", "abc")?;
+462:    /// tree.insert("a", "abc")?;
+463:    /// tree.insert("ab", "abc")?;
+464:    /// tree.insert("abc", "abc")?;
+480:    /// For insert-only workloads (e.g. logs, time series)
+493:    /// tree.insert("1", "abc")?;
+528:    /// tree.insert("1", "abc")?;
+529:    /// tree.insert("3", "abc")?;
+530:    /// tree.insert("5", "abc")?;
+564:    /// tree.insert("a", "abc")?;
+589:    /// tree.insert("a", "abc")?;
+612:    /// tree.insert("a", "my_value")?;
+637:    /// tree.insert("a", "my_value")?;
+663:    /// tree.insert("1", "abc")?;
+664:    /// tree.insert("3", "abc")?;
+665:    /// tree.insert("5", "abc")?;
+687:    /// tree.insert("1", "abc")?;
+688:    /// tree.insert("3", "abc")?;
+689:    /// tree.insert("5", "abc")?;
+722:        let journal_writer = self.supervisor.journal.get_writer();
+724:        self.inner_rotate_memtable(journal_writer, active_memtable_id)
+727:    pub(crate) fn inner_rotate_memtable(
+818:    pub(crate) fn request_rotation(&self) {
+833:            self.request_rotation();
+895:    /// tree.insert("a", "abc")?;
+905:    pub fn insert<K: Into<UserKey>, V: Into<UserValue>>(
+919:        let mut journal_writer = self.supervisor.journal.get_writer();
+940:        let (item_size, memtable_size) = self.tree.insert(key, value, seqno);
+965:    /// tree.insert("a", "abc")?;
+990:        let mut journal_writer = self.supervisor.journal.get_writer();
+1047:    /// tree.insert("a", "abc")?;
+1073:        let mut journal_writer = self.supervisor.journal.get_writer();
+
+ succeeded in 660ms:
+    }
+
+    /// Returns the metrics struct of the underlying LSM-tree.
+    ///
+    /// # Note
+    ///
+    /// This function is experimental and metric names may change in future releases.
+    #[cfg(feature = "metrics")]
+    #[doc(hidden)]
+    pub fn metrics(&self) -> &lsm_tree::Metrics {
+        &**self.tree.metrics()
+    }
+
+    /// Returns the underlying LSM-tree's path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.tree.tree_config().path.as_path()
+    }
+
+    /// Returns the disk space usage of this keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!(0, tree.disk_space());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    pub fn disk_space(&self) -> u64 {
+        self.tree.disk_space()
+    }
+
+    /// Returns an iterator that scans through the entire keyspace.
+    ///
+    /// Avoid using this function, or limit it as otherwise it may scan a lot of items.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    /// tree.insert("f", "abc")?;
+    /// tree.insert("g", "abc")?;
+    /// assert_eq!(3, tree.iter().count());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    #[expect(clippy::iter_without_into_iter)]
+    pub fn iter(&self) -> Iter {
+        let nonce = self.supervisor.snapshot_tracker.open();
+        let iter = self.tree.iter(nonce.instant, None);
+        crate::iter::Iter::new(nonce, iter)
+    }
+
+    /// Returns an iterator over a range of items.
+    ///
+    /// Avoid using full or unbounded ranges as they may scan a lot of items (unless limited).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    /// tree.insert("f", "abc")?;
+    /// tree.insert("g", "abc")?;
+    /// assert_eq!(2, tree.range("a"..="f").count());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn range<K: AsRef<[u8]>, R: RangeBounds<K>>(&self, range: R) -> Iter {
+        let nonce = self.supervisor.snapshot_tracker.open();
+        let iter = self.tree.range(range, SeqNo::MAX, None);
+        crate::iter::Iter::new(nonce, iter)
+    }
+
+    /// Returns an iterator over a prefixed set of items.
+    ///
+    /// Avoid using an empty prefix as it may scan a lot of items (unless limited).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    /// tree.insert("ab", "abc")?;
+    /// tree.insert("abc", "abc")?;
+    /// assert_eq!(2, tree.prefix("ab").count());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn prefix<K: AsRef<[u8]>>(&self, prefix: K) -> Iter {
+        let nonce = self.supervisor.snapshot_tracker.open();
+        let iter = self.tree.prefix(prefix, SeqNo::MAX, None);
+        crate::iter::Iter::new(nonce, iter)
+    }
+
+    /// Approximates the number of items in the keyspace.
+    ///
+    /// For update- or delete-heavy workloads, this value will
+    /// diverge from the real value, but is a O(1) operation.
+    ///
+    /// For insert-only workloads (e.g. logs, time series)
+    /// this value is reliable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!(tree.approximate_len(), 0);
+    ///
+    /// tree.insert("1", "abc")?;
+    /// assert_eq!(tree.approximate_len(), 1);
+    ///
+    /// tree.remove("1")?;
+    /// // Oops! approximate_len will not be reliable here
+    /// assert_eq!(tree.approximate_len(), 2);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    pub fn approximate_len(&self) -> usize {
+        self.tree.approximate_len()
+    }
+
+    /// Scans the entire keyspace, returning the number of items.
+    ///
+    /// # Caution
+    ///
+    /// This operation scans the entire keyspace: O(n) complexity!
+    ///
+    /// Never, under any circumstances, use .`len()` == 0 to check
+    /// if the keyspace is empty, use [`Keyspace::is_empty`] instead.
+    ///
+    /// If you want an estimate, use [`Keyspace::approximate_len`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert_eq!(tree.len()?, 0);
+    ///
+    /// tree.insert("1", "abc")?;
+    /// tree.insert("3", "abc")?;
+    /// tree.insert("5", "abc")?;
+    /// assert_eq!(tree.len()?, 3);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn len(&self) -> crate::Result<usize> {
+        let mut count = 0;
+
+        for guard in self.iter() {
+            let _ = guard.key()?;
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    /// Returns `true` if the keyspace is empty.
+    ///
+    /// This operation has O(log N) complexity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert!(tree.is_empty()?);
+    ///
+    /// tree.insert("a", "abc")?;
+    /// assert!(!tree.is_empty()?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn is_empty(&self) -> crate::Result<bool> {
+        self.tree.is_empty(SeqNo::MAX, None).map_err(Into::into)
+    }
+
+    /// Returns `true` if the keyspace contains the specified key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// assert!(!tree.contains_key("a")?);
+    ///
+    /// tree.insert("a", "abc")?;
+    /// assert!(tree.contains_key("a")?);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn contains_key<K: AsRef<[u8]>>(&self, key: K) -> crate::Result<bool> {
+        self.tree.contains_key(key, SeqNo::MAX).map_err(Into::into)
+    }
+
+    /// Retrieves an item from the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "my_value")?;
+    ///
+    /// let item = tree.get("a")?;
+    /// assert_eq!(Some("my_value".as_bytes().into()), item);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn get<K: AsRef<[u8]>>(&self, key: K) -> crate::Result<Option<lsm_tree::UserValue>> {
+        Ok(self.tree.get(key, SeqNo::MAX)?)
+    }
+
+    /// Retrieves the size of an item from the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "my_value")?;
+    ///
+    /// let len = tree.size_of("a")?.unwrap_or_default();
+    /// assert_eq!("my_value".len() as u32, len);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn size_of<K: AsRef<[u8]>>(&self, key: K) -> crate::Result<Option<u32>> {
+        Ok(self.tree.size_of(key, SeqNo::MAX)?)
+    }
+
+    /// Returns the first key-value pair in the keyspace.
+    /// The key in this pair is the minimum key in the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("1", "abc")?;
+    /// tree.insert("3", "abc")?;
+    /// tree.insert("5", "abc")?;
+    ///
+    /// let key = tree.first_key_value().expect("item should exist").key()?;
+    /// assert_eq!(&*key, "1".as_bytes());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn first_key_value(&self) -> Option<Guard> {
+        self.tree.first_key_value(SeqNo::MAX, None).map(Guard)
+    }
+
+    /// Returns the last key-value pair in the keyspace.
+    /// The key in this pair is the maximum key in the keyspace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("1", "abc")?;
+    /// tree.insert("3", "abc")?;
+    /// tree.insert("5", "abc")?;
+    ///
+    /// let key = tree.last_key_value().expect("item should exist").key()?;
+    /// assert_eq!(&*key, "5".as_bytes());
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    pub fn last_key_value(&self) -> Option<Guard> {
+        self.tree.last_key_value(SeqNo::MAX, None).map(Guard)
+    }
+
+    /// Returns `true` if the underlying LSM-tree is key-value-separated.
+    #[must_use]
+    pub fn is_kv_separated(&self) -> bool {
+        matches!(self.tree, crate::AnyTree::Blob(_))
+    }
+
+    // NOTE: Used in tests
+    #[doc(hidden)]
+    pub fn rotate_memtable_and_wait(&self) -> crate::Result<()> {
+        if self.rotate_memtable()? {
+            self.supervisor.flush_manager.wait_for_empty();
+
+            while self.tree.sealed_memtable_count() > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn rotate_memtable(&self) -> crate::Result<bool> {
+        log::trace!("acquiring journal lock");
+        let journal_writer = self.supervisor.journal.get_writer();
+        let active_memtable_id = self.tree.active_memtable().id();
+        self.inner_rotate_memtable(journal_writer, active_memtable_id)
+    }
+
+    pub(crate) fn inner_rotate_memtable(
+        &self,
+        journal_writer: MutexGuard<'_, crate::journal::writer::Writer>,
+        memtable_id: lsm_tree::MemtableId,
+    ) -> crate::Result<bool> {
+        log::debug!("Rotating keyspace {:?}", self.name);
+
+        if self.tree.active_memtable().id() != memtable_id {
+            return Ok(false);
+        }
+
+        // Rotate memtable
+        let Some(_) = self.tree.rotate_memtable() else {
+            log::debug!("Got no sealed memtable, someone beat us to it");
+            return Ok(false);
+        };
+
+        drop(journal_writer);
+
+        self.supervisor.flush_manager.enqueue(Arc::new(FlushTask {
+            keyspace: self.clone(),
+        }));
+
+        self.worker_messager.send(WorkerMessage::Flush).ok();
+
+        {
+            // NOTE: If the difference between watermark is too large, and
+            // we never opened a snapshot, we need to pull the watermark up
+            //
+            // https://github.com/fjall-rs/fjall/discussions/85
+            self.supervisor.snapshot_tracker.pullup();
+            self.supervisor.snapshot_tracker.gc();
+
+            for keyspace in self
+                .supervisor
+                .keyspaces
+                .read()
+                .expect("lock is poisoned")
+                .values()
+            {
+                if let Err(e) = keyspace.tree.get_version_history_lock().maintenance(
+                    keyspace.path(),
+                    self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+                ) {
+                    log::warn!(
+                        "Version history GC failed for keyspace {:?}: {e:?}",
+                        keyspace.name,
+                    );
+                }
+            }
+        }
+
+        #[expect(clippy::expect_used)]
+        self.supervisor
+            .journal_manager
+            .write()
+            .expect("lock is poisoned")
+            .maintenance()?;
+
+        Ok(true)
+    }
+
+    fn check_write_halt(&self) {
+        while self.tree.l0_run_count() >= 30 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub(crate) fn local_backpressure(&self) -> bool {
+        let mut throttled = false;
+
+        let l0_run_count = self.tree.l0_run_count();
+
+        if l0_run_count >= 20 {
+            perform_write_stall(l0_run_count);
+            self.check_write_halt();
+            throttled = true;
+        }
+
+        while self.tree.sealed_memtable_count() >= 4 {
+            log::debug!(
+                "Halting writes because we have 4+ sealed memtables in {:?} queued up",
+                self.name,
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            throttled = true;
+        }
+
+        throttled
+    }
+
+    pub(crate) fn request_rotation(&self) {
+        let lock = self.tree.get_version_history_lock();
+        let latest_version = lock.latest_version();
+
+codex
+The compaction worker is fjall-owned and is the path that calls `tree.compact()`, so a per-keyspace operation gate can cover the stale-compaction payload race. I’m also checking write/rotation paths because `clear()` must not allow a pending flush to re-register pre-clear memtables after the version rewrite.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"900,1120p\" src/keyspace/mod.rs && grep -RIn \"register_tables\\|flush_to_tables\\|rotate_memtable()\\|tree.flush\\|tree.compact\\|major_compact(\" src 2>/dev/null'" in /private/tmp
+ succeeded in 778ms:
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn insert<K: Into<UserKey>, V: Into<UserValue>>(
+        &self,
+        key: K,
+        value: V,
+    ) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        if self.is_deleted.load(Ordering::Relaxed) {
+            return Err(crate::Error::KeyspaceDeleted);
+        }
+
+        let key = key.into();
+        let value = value.into();
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_raw(self.id, &key, &value, lsm_tree::ValueType::Value, seqno)?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        let (item_size, memtable_size) = self.tree.insert(key, value, seqno);
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        self.supervisor.write_buffer_size.allocate(item_size);
+        self.maintenance(memtable_size);
+
+        Ok(())
+    }
+
+    /// Removes an item from the keyspace.
+    ///
+    /// The key may be up to 65536 bytes long.
+    /// Shorter keys result in better performance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    ///
+    /// let item = tree.get("a")?.expect("should have item");
+    /// assert_eq!("abc".as_bytes(), &*item);
+    ///
+    /// tree.remove("a")?;
+    ///
+    /// let item = tree.get("a")?;
+    /// assert_eq!(None, item);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn remove<K: Into<UserKey>>(&self, key: K) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        if self.is_deleted.load(Ordering::Relaxed) {
+            return Err(crate::Error::KeyspaceDeleted);
+        }
+
+        let key = key.into();
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_raw(self.id, &key, &[], lsm_tree::ValueType::Tombstone, seqno)?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        let (item_size, memtable_size) = self.tree.remove(key, seqno);
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        self.supervisor.write_buffer_size.allocate(item_size);
+        self.maintenance(memtable_size);
+
+        Ok(())
+    }
+
+    /// Removes an item from the keyspace, leaving behind a weak tombstone.
+    ///
+    /// When a weak tombstone is matched with a single write in a compaction,
+    /// the tombstone will be removed along with the value. If the key was
+    /// overwritten the result of a `remove_weak` is undefined.
+    ///
+    /// Only use this remove if it is known that the key has only been written
+    /// to once since its creation or last `remove_weak`.
+    ///
+    /// The key may be up to 65536 bytes long.
+    /// Shorter keys result in better performance.
+    ///
+    /// # Experimental
+    ///
+    /// This function is currently experimental.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use fjall::{Database, KeyspaceCreateOptions};
+    /// #
+    /// # let folder = tempfile::tempdir()?;
+    /// # let db = Database::builder(folder).open()?;
+    /// # let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+    /// tree.insert("a", "abc")?;
+    ///
+    /// let item = tree.get("a")?.expect("should have item");
+    /// assert_eq!("abc".as_bytes(), &*item);
+    ///
+    /// tree.remove_weak("a")?;
+    ///
+    /// let item = tree.get("a")?;
+    /// assert_eq!(None, item);
+    /// #
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    #[doc(hidden)]
+    pub fn remove_weak<K: Into<UserKey>>(&self, key: K) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        if self.is_deleted.load(Ordering::Relaxed) {
+            return Err(crate::Error::KeyspaceDeleted);
+        }
+
+        let key = key.into();
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_raw(
+            self.id,
+            &key,
+            &[],
+            lsm_tree::ValueType::WeakTombstone,
+            seqno,
+        )?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!(
+                        "persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}"
+                    );
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        let (item_size, memtable_size) = self.tree.remove(key, seqno);
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        self.supervisor.write_buffer_size.allocate(item_size);
+        self.maintenance(memtable_size);
+
+        Ok(())
+    }
+}
+src/db_test.rs:167:        tree.rotate_memtable()?;
+src/db_test.rs:170:        tree.rotate_memtable()?;
+src/db_test.rs:173:        tree.rotate_memtable()?;
+src/keyspace/mod.rs:709:        if self.rotate_memtable()? {
+src/keyspace/mod.rs:739:        let Some(_) = self.tree.rotate_memtable() else {
+src/keyspace/mod.rs:868:    pub fn major_compact(&self) -> crate::Result<()> {
+src/keyspace/mod.rs:869:        self.tree.major_compact(
+src/recovery.rs:229:            } else if let Some(sealed_memtable) = tree.rotate_memtable() {
+
+codex
+I’m going to add a per-keyspace tree-operation mutex and take it around `clear()`, ingestion finish, flush, and compaction entry points. That gives `clear()` a barrier against every fjall-managed path that can snapshot an old lsm-tree version and publish changes later.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'command -v apply_patch || true'" in /private/tmp
+ succeeded in 1034ms:
+codex
+The remote environment does not have `apply_patch`, so I’ll make the source edits through the proxy with small scripted replacements and then inspect the changed hunks.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'perl -0pi -e \"s/sync::\\{atomic::AtomicBool, Arc, MutexGuard\\}/sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard}/\" src/keyspace/mod.rs
+perl -0pi -e \"s/pub\\(crate\\) worker_messager: flume::Sender<WorkerMessage>,\\n\\n    #\\[expect\\(unused\\)\\]/pub(crate) worker_messager: flume::Sender<WorkerMessage>,\\n\\n    pub(crate) tree_operation_lock: Mutex<()>,\\n\\n    #[expect(unused)]/\" src/keyspace/mod.rs
+perl -0pi -e \"s/(worker_messager: db\\.worker_pool\\.sender\\.clone\\(\\),\\n            is_deleted: AtomicBool::default\\(\\),)/"'$1'"\\n            tree_operation_lock: Mutex::default(),/g\" src/keyspace/mod.rs
+perl -0pi -e \"s/(journal_writer\\.write_clear\\(self\\.id, seqno\\)\\?;\\n\\n)/"'$1        let _tree_operation_lock = self.tree_operation_lock.lock().expect('"\\\"lock is poisoned\\\");\\n\\n/\" src/keyspace/mod.rs
+perl -0pi -e \"s/(pub fn major_compact\\(&self\\) -> crate::Result<\\(\\)> \\{\\n)/"'$1        let _tree_operation_lock = self.tree_operation_lock.lock().expect('"\\\"lock is poisoned\\\");\\n\\n/\" src/keyspace/mod.rs
+perl -0pi -e \"s/(let _journal_lock = self\\.keyspace\\.supervisor\\.journal\\.get_writer\\(\\);\\n\\n)/"'$1        let _tree_operation_lock = self'"\\n            .keyspace\\n            .tree_operation_lock\\n            .lock()\\n            .expect(\\\"lock is poisoned\\\");\\n\\n/\" src/ingestion.rs
+perl -0pi -e \"s/(log::debug"'!'"\\(\\\"Flushing keyspace \\{:\\?\\}\\\", task\\.keyspace\\.name\\);\\n\\n)/"'$1    let _tree_operation_lock = task'"\\n        .keyspace\\n        .tree_operation_lock\\n        .lock()\\n        .expect(\\\"lock is poisoned\\\");\\n\\n/\" src/flush/worker.rs
+perl -0pi -e \"s/(log::debug"'!'"\\(\\\"Compacting keyspace \\{:\\?\\}\\\", keyspace\\.name\\);\\n\\n)/"'$1    let _tree_operation_lock = keyspace'"\\n        .tree_operation_lock\\n        .lock()\\n        .expect(\\\"lock is poisoned\\\");\\n\\n/\" src/compaction/worker.rs
+
+grep -n \"tree_operation_lock\\|sync::\" src/keyspace/mod.rs src/ingestion.rs src/flush/worker.rs src/compaction/worker.rs'" in /private/tmp
+ succeeded in 783ms:
+src/keyspace/mod.rs:28:    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard},
+src/keyspace/mod.rs:90:    pub(crate) tree_operation_lock: Mutex<()>,
+src/keyspace/mod.rs:100:        if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
+src/keyspace/mod.rs:239:        use std::sync::atomic::Ordering;
+src/keyspace/mod.rs:250:                let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+src/keyspace/mod.rs:315:            tree_operation_lock: Mutex::default(),
+src/keyspace/mod.rs:870:            let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+src/keyspace/mod.rs:913:        use std::sync::atomic::Ordering;
+src/keyspace/mod.rs:985:        use std::sync::atomic::Ordering;
+src/keyspace/mod.rs:1068:        use std::sync::atomic::Ordering;
+src/ingestion.rs:52:                let _tree_operation_lock = self
+src/ingestion.rs:54:            .tree_operation_lock
+src/flush/worker.rs:18:        let _tree_operation_lock = task
+src/flush/worker.rs:20:        .tree_operation_lock
+src/compaction/worker.rs:15:    use std::sync::atomic::Ordering::Relaxed;
+src/compaction/worker.rs:30:        let _tree_operation_lock = keyspace
+src/compaction/worker.rs:31:        .tree_operation_lock
+
+codex
+The edit landed, but I’m going to inspect the affected regions now rather than trust the replacements. In particular, I need to confirm both keyspace constructors initialize the new mutex and that the lock scopes are not accidentally too narrow or malformed.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"70,105p\" src/keyspace/mod.rs && sed -n \"232,265p\" src/keyspace/mod.rs && sed -n \"300,345p\" src/keyspace/mod.rs && sed -n \"855,880p\" src/keyspace/mod.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'sed -n \"35,70p\" src/ingestion.rs && sed -n \"10,35p\" src/flush/worker.rs && sed -n \"20,45p\" src/compaction/worker.rs'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'grep -n \"Self(Arc::new(KeyspaceInner\" -A20 src/keyspace/mod.rs'" in /private/tmp
+ succeeded in 708ms:
+308:        Self(Arc::new(KeyspaceInner {
+309-            id: keyspace_id,
+310-            name,
+311-            tree,
+312-            config,
+313-            supervisor: db.supervisor.clone(),
+314-            
+315-            tree_operation_lock: Mutex::default(),
+316-            is_poisoned: db.is_poisoned.clone(),
+317-            lock_file: db.lock_file.clone(),
+318-            stats: db.stats.clone(),
+319-        }))
+320-    }
+321-
+322-    /// Creates a new keyspace.
+323-    pub(crate) fn create_new(
+324-        keyspace_id: InternalKeyspaceId,
+325-        db: &Database,
+326-        name: KeyspaceKey,
+327-        config: CreateOptions,
+328-    ) -> crate::Result<Self> {
+--
+350:        Ok(Self(Arc::new(KeyspaceInner {
+351-            supervisor: db.supervisor.clone(),
+352-            worker_messager: db.worker_pool.sender.clone(),
+353-            id: keyspace_id,
+354-            name,
+355-            config,
+356-            tree,
+357-            is_deleted: AtomicBool::default(),
+358-            is_poisoned: db.is_poisoned.clone(),
+359-            stats: db.stats.clone(),
+360-            lock_file: db.lock_file.clone(),
+361-        })))
+362-    }
+363-
+364-    /// Returns the metrics struct of the underlying LSM-tree.
+365-    ///
+366-    /// # Note
+367-    ///
+368-    /// This function is experimental and metric names may change in future releases.
+369-    #[cfg(feature = "metrics")]
+370-    #[doc(hidden)]
+
+ succeeded in 718ms:
+
+    pub fn finish(self) -> crate::Result<()> {
+        // NOTE: We hold to avoid a race condition with concurrent writes:
+        //
+        // write         ingest
+        // lock journal
+        // |
+        // next seqno=1
+        // |
+        // --------------finish
+        //                 flush
+        //                 seqno=2
+        //                 register
+        //                 |
+        // -----------------
+        // |
+        // insert seqno=1
+                let _tree_operation_lock = self
+            .keyspace
+            .tree_operation_lock
+            .lock()
+            .expect("lock is poisoned");
+
+        self.inner
+            .finish()
+            .inspect(|()| {
+                self.keyspace
+                    .worker_messager
+                    .try_send(WorkerMessage::Compact(self.keyspace.clone()))
+                    .ok();
+
+                self.keyspace.supervisor.snapshot_tracker.gc();
+            })
+            .map_err(Into::into)
+    }
+}
+
+/// Runs flush logic.
+pub fn run(
+    task: &Task,
+    write_buffer_manager: &WriteBufferManager,
+    snapshot_tracker: &SnapshotTracker,
+    _stats: &Stats,
+) -> crate::Result<()> {
+        let _tree_operation_lock = task
+        .keyspace
+        .tree_operation_lock
+        .lock()
+        .expect("lock is poisoned");
+
+    let gc_watermark = snapshot_tracker.get_seqno_safe_to_gc();
+
+    let flush_lock = task.keyspace.tree.get_flush_lock();
+
+    match task
+        .keyspace
+        .tree
+        .flush(&flush_lock, gc_watermark)
+        .inspect_err(|e| {
+            log::error!("Flush error: {e:?}");
+        })? {
+        Some(flushed_bytes) => {
+
+    log::trace!(
+        "Checking compaction strategy for keyspace {:?}",
+        keyspace.name,
+    );
+
+    let strategy = keyspace.config.compaction_strategy.clone();
+
+    stats.active_compaction_count.fetch_add(1, Relaxed);
+
+        let _tree_operation_lock = keyspace
+        .tree_operation_lock
+        .lock()
+        .expect("lock is poisoned");
+
+    let start = Instant::now();
+
+    if let Err(e) = keyspace
+        .tree
+        .compact(strategy.clone(), snapshot_tracker.get_seqno_safe_to_gc())
+    {
+        log::error!("Compaction failed: {e:?}");
+        stats.active_compaction_count.fetch_sub(1, Relaxed);
+
+        return Err(e.into());
+    }
+
+ succeeded in 738ms:
+    #[doc(hidden)]
+    pub config: CreateOptions,
+
+    /// If `true`, the keyspace is marked as deleted
+    pub(crate) is_deleted: AtomicBool,
+
+    /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+    pub(crate) is_poisoned: Arc<AtomicBool>,
+
+    /// LSM-tree wrapper
+    #[doc(hidden)]
+    pub tree: AnyTree,
+
+    pub(crate) supervisor: Supervisor,
+
+    /// Database-level stats
+    pub(crate) stats: Arc<Stats>,
+
+    pub(crate) worker_messager: flume::Sender<WorkerMessage>,
+
+    pub(crate) tree_operation_lock: Mutex<()>,
+
+    #[expect(unused)]
+    lock_file: LockedFileGuard,
+}
+
+impl Drop for KeyspaceInner {
+    fn drop(&mut self) {
+        log::trace!("Dropping KeyspaceInner: {:?}", self.name);
+
+        if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
+            let path = &self.tree.tree_config().path;
+
+            // IMPORTANT: First, delete the manifest,
+            // once that is deleted, the keyspace is treated as uninitialized
+            // even if the .deleted marker is removed
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn clear(&self) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+                let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        self.tree.clear()?;
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+
+    pub(crate) fn from_database(
+        keyspace_id: InternalKeyspaceId,
+        db: &Database,
+        tree: AnyTree,
+        name: KeyspaceKey,
+        config: CreateOptions,
+    ) -> Self {
+        Self(Arc::new(KeyspaceInner {
+            id: keyspace_id,
+            name,
+            tree,
+            config,
+            supervisor: db.supervisor.clone(),
+            
+            tree_operation_lock: Mutex::default(),
+            is_poisoned: db.is_poisoned.clone(),
+            lock_file: db.lock_file.clone(),
+            stats: db.stats.clone(),
+        }))
+    }
+
+    /// Creates a new keyspace.
+    pub(crate) fn create_new(
+        keyspace_id: InternalKeyspaceId,
+        db: &Database,
+        name: KeyspaceKey,
+        config: CreateOptions,
+    ) -> crate::Result<Self> {
+        log::debug!("Creating keyspace {name:?}->{keyspace_id}");
+
+        let base_folder = db
+            .config
+            .path
+            .join(KEYSPACES_FOLDER)
+            .join(keyspace_id.to_string());
+
+        std::fs::create_dir_all(&base_folder)?;
+
+        let base_config = lsm_tree::Config::new(
+            base_folder,
+            db.supervisor.seqno.clone(),
+            db.supervisor.snapshot_tracker.get_ref(),
+        )
+        .use_descriptor_table(db.config.descriptor_table.clone())
+        .use_cache(db.config.cache.clone());
+    }
+
+    /// Number of blob files in the LSM-tree.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn blob_file_count(&self) -> usize {
+        self.tree.blob_file_count()
+    }
+
+    /// Performs major compaction, blocking the caller until it's done.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    #[doc(hidden)]
+            let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+
+        self.tree.major_compact(
+            64_000_000,
+            self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+        )?;
+
+        // TODO: 3.0.0 ----^
+        // compaction strategy needs a method: strategy.table_target_size()
+
+        Ok(())
+
+codex
+The scripted replacement was too loose and removed a couple of lines, so I’m correcting the affected blocks explicitly now: restoring the journal write in `clear()`, restoring the ingestion journal guard, and adding the missing constructor fields.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'nl -ba src/keyspace/mod.rs | sed -n \"232,270p;300,365p;860,880p\" && nl -ba src/ingestion.rs | sed -n \"35,65p\"'" in /private/tmp
+ succeeded in 666ms:
+   232	    /// # Ok::<(), fjall::Error>(())
+   233	    /// ```
+   234	    ///
+   235	    /// # Errors
+   236	    ///
+   237	    /// Will return `Err` if an IO error occurs.
+   238	    pub fn clear(&self) -> crate::Result<()> {
+   239	        use std::sync::atomic::Ordering;
+   240	
+   241	        let mut journal_writer = self.supervisor.journal.get_writer();
+   242	
+   243	        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+   244	        if self.is_poisoned.load(Ordering::Relaxed) {
+   245	            return Err(crate::Error::Poisoned);
+   246	        }
+   247	
+   248	        let seqno = self.supervisor.seqno.next();
+   249	
+   250	                let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+   251	
+   252	        if !self.config.manual_journal_persist {
+   253	            journal_writer
+   254	                .persist(crate::PersistMode::Buffer)
+   255	                .map_err(|e| {
+   256	                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+   257	                    self.is_poisoned.store(true, Ordering::Relaxed);
+   258	                    e
+   259	                })?;
+   260	        }
+   261	
+   262	        self.tree.clear()?;
+   263	
+   264	        self.supervisor.snapshot_tracker.publish(seqno);
+   265	
+   266	        drop(journal_writer);
+   267	
+   268	        Ok(())
+   269	    }
+   270	
+   300	
+   301	    pub(crate) fn from_database(
+   302	        keyspace_id: InternalKeyspaceId,
+   303	        db: &Database,
+   304	        tree: AnyTree,
+   305	        name: KeyspaceKey,
+   306	        config: CreateOptions,
+   307	    ) -> Self {
+   308	        Self(Arc::new(KeyspaceInner {
+   309	            id: keyspace_id,
+   310	            name,
+   311	            tree,
+   312	            config,
+   313	            supervisor: db.supervisor.clone(),
+   314	            
+   315	            tree_operation_lock: Mutex::default(),
+   316	            is_poisoned: db.is_poisoned.clone(),
+   317	            lock_file: db.lock_file.clone(),
+   318	            stats: db.stats.clone(),
+   319	        }))
+   320	    }
+   321	
+   322	    /// Creates a new keyspace.
+   323	    pub(crate) fn create_new(
+   324	        keyspace_id: InternalKeyspaceId,
+   325	        db: &Database,
+   326	        name: KeyspaceKey,
+   327	        config: CreateOptions,
+   328	    ) -> crate::Result<Self> {
+   329	        log::debug!("Creating keyspace {name:?}->{keyspace_id}");
+   330	
+   331	        let base_folder = db
+   332	            .config
+   333	            .path
+   334	            .join(KEYSPACES_FOLDER)
+   335	            .join(keyspace_id.to_string());
+   336	
+   337	        std::fs::create_dir_all(&base_folder)?;
+   338	
+   339	        let base_config = lsm_tree::Config::new(
+   340	            base_folder,
+   341	            db.supervisor.seqno.clone(),
+   342	            db.supervisor.snapshot_tracker.get_ref(),
+   343	        )
+   344	        .use_descriptor_table(db.config.descriptor_table.clone())
+   345	        .use_cache(db.config.cache.clone());
+   346	
+   347	        let base_config = apply_to_base_config(base_config, &config);
+   348	        let tree = base_config.open()?;
+   349	
+   350	        Ok(Self(Arc::new(KeyspaceInner {
+   351	            supervisor: db.supervisor.clone(),
+   352	            worker_messager: db.worker_pool.sender.clone(),
+   353	            id: keyspace_id,
+   354	            name,
+   355	            config,
+   356	            tree,
+   357	            is_deleted: AtomicBool::default(),
+   358	            is_poisoned: db.is_poisoned.clone(),
+   359	            stats: db.stats.clone(),
+   360	            lock_file: db.lock_file.clone(),
+   361	        })))
+   362	    }
+   363	
+   364	    /// Returns the metrics struct of the underlying LSM-tree.
+   365	    ///
+   860	    pub fn blob_file_count(&self) -> usize {
+   861	        self.tree.blob_file_count()
+   862	    }
+   863	
+   864	    /// Performs major compaction, blocking the caller until it's done.
+   865	    ///
+   866	    /// # Errors
+   867	    ///
+   868	    /// Will return `Err` if an IO error occurs.
+   869	    #[doc(hidden)]
+   870	            let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+   871	
+   872	        self.tree.major_compact(
+   873	            64_000_000,
+   874	            self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+   875	        )?;
+   876	
+   877	        // TODO: 3.0.0 ----^
+   878	        // compaction strategy needs a method: strategy.table_target_size()
+   879	
+   880	        Ok(())
+    35	
+    36	    pub fn finish(self) -> crate::Result<()> {
+    37	        // NOTE: We hold to avoid a race condition with concurrent writes:
+    38	        //
+    39	        // write         ingest
+    40	        // lock journal
+    41	        // |
+    42	        // next seqno=1
+    43	        // |
+    44	        // --------------finish
+    45	        //                 flush
+    46	        //                 seqno=2
+    47	        //                 register
+    48	        //                 |
+    49	        // -----------------
+    50	        // |
+    51	        // insert seqno=1
+    52	                let _tree_operation_lock = self
+    53	            .keyspace
+    54	            .tree_operation_lock
+    55	            .lock()
+    56	            .expect("lock is poisoned");
+    57	
+    58	        self.inner
+    59	            .finish()
+    60	            .inspect(|()| {
+    61	                self.keyspace
+    62	                    .worker_messager
+    63	                    .try_send(WorkerMessage::Compact(self.keyspace.clone()))
+    64	                    .ok();
+    65	
+
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'python3 - <<\"PY\"
+from pathlib import Path
+p=Path(\"src/keyspace/mod.rs\")
+s=p.read_text()
+old=\"\"\"        let seqno = self.supervisor.seqno.next();\\n\\n                let _tree_operation_lock = self.tree_operation_lock.lock().expect(\\\"lock is poisoned\\\");\\n\\n        if "'!self.config.manual_journal_persist {'"\\n\"\"\"
+new=\"\"\"        let seqno = self.supervisor.seqno.next();\\n\\n        journal_writer.write_clear(self.id, seqno)?;\\n\\n        let _tree_operation_lock = self.tree_operation_lock.lock().expect(\\\"lock is poisoned\\\");\\n\\n        if "'!self.config.manual_journal_persist {'"\\n\"\"\"
+s=s.replace(old,new)
+old=\"\"\"            supervisor: db.supervisor.clone(),\\n            \\n            tree_operation_lock: Mutex::default(),\\n            is_poisoned: db.is_poisoned.clone(),\\n            lock_file: db.lock_file.clone(),\\n            stats: db.stats.clone(),\\n\"\"\"
+new=\"\"\"            supervisor: db.supervisor.clone(),\\n            worker_messager: db.worker_pool.sender.clone(),\\n            is_deleted: AtomicBool::default(),\\n            is_poisoned: db.is_poisoned.clone(),\\n            tree_operation_lock: Mutex::default(),\\n            lock_file: db.lock_file.clone(),\\n            stats: db.stats.clone(),\\n\"\"\"
+s=s.replace(old,new)
+old=\"\"\"            is_poisoned: db.is_poisoned.clone(),\\n            stats: db.stats.clone(),\\n            lock_file: db.lock_file.clone(),\\n\"\"\"
+new=\"\"\"            is_poisoned: db.is_poisoned.clone(),\\n            tree_operation_lock: Mutex::default(),\\n            stats: db.stats.clone(),\\n            lock_file: db.lock_file.clone(),\\n\"\"\"
+s=s.replace(old,new)
+old=\"\"\"    #[doc(hidden)]\\n            let _tree_operation_lock = self.tree_operation_lock.lock().expect(\\\"lock is poisoned\\\");\\n\\n        self.tree.major_compact(\\n\"\"\"
+new=\"\"\"    #[doc(hidden)]\\n    pub fn major_compact(&self) -> crate::Result<()> {\\n        let _tree_operation_lock = self.tree_operation_lock.lock().expect(\\\"lock is poisoned\\\");\\n\\n        self.tree.major_compact(\\n\"\"\"
+s=s.replace(old,new)
+p.write_text(s)
+
+p=Path(\"src/ingestion.rs\")
+s=p.read_text()
+old=\"\"\"        // |\\n        // insert seqno=1\\n                let _tree_operation_lock = self\\n            .keyspace\\n            .tree_operation_lock\\n            .lock()\\n            .expect(\\\"lock is poisoned\\\");\\n\\n        self.inner\\n\"\"\"
+new=\"\"\"        // |\\n        // insert seqno=1\\n        let _journal_lock = self.keyspace.supervisor.journal.get_writer();\\n\\n        let _tree_operation_lock = self\\n            .keyspace\\n            .tree_operation_lock\\n            .lock()\\n            .expect(\\\"lock is poisoned\\\");\\n\\n        self.inner\\n\"\"\"
+s=s.replace(old,new)
+p.write_text(s)
+PY
+
+nl -ba src/keyspace/mod.rs | sed -n \"238,262p;306,362p;866,884p\"
+nl -ba src/ingestion.rs | sed -n \"48,62p\"'" in /private/tmp
+ succeeded in 755ms:
+   238	    pub fn clear(&self) -> crate::Result<()> {
+   239	        use std::sync::atomic::Ordering;
+   240	
+   241	        let mut journal_writer = self.supervisor.journal.get_writer();
+   242	
+   243	        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+   244	        if self.is_poisoned.load(Ordering::Relaxed) {
+   245	            return Err(crate::Error::Poisoned);
+   246	        }
+   247	
+   248	        let seqno = self.supervisor.seqno.next();
+   249	
+   250	        journal_writer.write_clear(self.id, seqno)?;
+   251	
+   252	        let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+   253	
+   254	        if !self.config.manual_journal_persist {
+   255	            journal_writer
+   256	                .persist(crate::PersistMode::Buffer)
+   257	                .map_err(|e| {
+   258	                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+   259	                    self.is_poisoned.store(true, Ordering::Relaxed);
+   260	                    e
+   261	                })?;
+   262	        }
+   306	        tree: AnyTree,
+   307	        name: KeyspaceKey,
+   308	        config: CreateOptions,
+   309	    ) -> Self {
+   310	        Self(Arc::new(KeyspaceInner {
+   311	            id: keyspace_id,
+   312	            name,
+   313	            tree,
+   314	            config,
+   315	            supervisor: db.supervisor.clone(),
+   316	            worker_messager: db.worker_pool.sender.clone(),
+   317	            is_deleted: AtomicBool::default(),
+   318	            is_poisoned: db.is_poisoned.clone(),
+   319	            tree_operation_lock: Mutex::default(),
+   320	            lock_file: db.lock_file.clone(),
+   321	            stats: db.stats.clone(),
+   322	        }))
+   323	    }
+   324	
+   325	    /// Creates a new keyspace.
+   326	    pub(crate) fn create_new(
+   327	        keyspace_id: InternalKeyspaceId,
+   328	        db: &Database,
+   329	        name: KeyspaceKey,
+   330	        config: CreateOptions,
+   331	    ) -> crate::Result<Self> {
+   332	        log::debug!("Creating keyspace {name:?}->{keyspace_id}");
+   333	
+   334	        let base_folder = db
+   335	            .config
+   336	            .path
+   337	            .join(KEYSPACES_FOLDER)
+   338	            .join(keyspace_id.to_string());
+   339	
+   340	        std::fs::create_dir_all(&base_folder)?;
+   341	
+   342	        let base_config = lsm_tree::Config::new(
+   343	            base_folder,
+   344	            db.supervisor.seqno.clone(),
+   345	            db.supervisor.snapshot_tracker.get_ref(),
+   346	        )
+   347	        .use_descriptor_table(db.config.descriptor_table.clone())
+   348	        .use_cache(db.config.cache.clone());
+   349	
+   350	        let base_config = apply_to_base_config(base_config, &config);
+   351	        let tree = base_config.open()?;
+   352	
+   353	        Ok(Self(Arc::new(KeyspaceInner {
+   354	            supervisor: db.supervisor.clone(),
+   355	            worker_messager: db.worker_pool.sender.clone(),
+   356	            id: keyspace_id,
+   357	            name,
+   358	            config,
+   359	            tree,
+   360	            is_deleted: AtomicBool::default(),
+   361	            is_poisoned: db.is_poisoned.clone(),
+   362	            tree_operation_lock: Mutex::default(),
+   866	    }
+   867	
+   868	    /// Performs major compaction, blocking the caller until it's done.
+   869	    ///
+   870	    /// # Errors
+   871	    ///
+   872	    /// Will return `Err` if an IO error occurs.
+   873	    #[doc(hidden)]
+   874	    pub fn major_compact(&self) -> crate::Result<()> {
+   875	        let _tree_operation_lock = self.tree_operation_lock.lock().expect("lock is poisoned");
+   876	
+   877	        self.tree.major_compact(
+   878	            64_000_000,
+   879	            self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+   880	        )?;
+   881	
+   882	        // TODO: 3.0.0 ----^
+   883	        // compaction strategy needs a method: strategy.table_target_size()
+   884	
+    48	        //                 |
+    49	        // -----------------
+    50	        // |
+    51	        // insert seqno=1
+    52	        let _journal_lock = self.keyspace.supervisor.journal.get_writer();
+    53	
+    54	        let _tree_operation_lock = self
+    55	            .keyspace
+    56	            .tree_operation_lock
+    57	            .lock()
+    58	            .expect("lock is poisoned");
+    59	
+    60	        self.inner
+    61	            .finish()
+    62	            .inspect(|()| {
+
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'nl -ba src/keyspace/mod.rs | sed -n \"353,368p\" && nl -ba src/flush/worker.rs | sed -n \"12,30p\" && nl -ba src/compaction/worker.rs | sed -n \"24,42p\"'" in /private/tmp
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'cargo fmt --check'" in /private/tmp
+ succeeded in 659ms:
+   353	        Ok(Self(Arc::new(KeyspaceInner {
+   354	            supervisor: db.supervisor.clone(),
+   355	            worker_messager: db.worker_pool.sender.clone(),
+   356	            id: keyspace_id,
+   357	            name,
+   358	            config,
+   359	            tree,
+   360	            is_deleted: AtomicBool::default(),
+   361	            is_poisoned: db.is_poisoned.clone(),
+   362	            tree_operation_lock: Mutex::default(),
+   363	            stats: db.stats.clone(),
+   364	            lock_file: db.lock_file.clone(),
+   365	        })))
+   366	    }
+   367	
+   368	    /// Returns the metrics struct of the underlying LSM-tree.
+    12	pub fn run(
+    13	    task: &Task,
+    14	    write_buffer_manager: &WriteBufferManager,
+    15	    snapshot_tracker: &SnapshotTracker,
+    16	    _stats: &Stats,
+    17	) -> crate::Result<()> {
+    18	        let _tree_operation_lock = task
+    19	        .keyspace
+    20	        .tree_operation_lock
+    21	        .lock()
+    22	        .expect("lock is poisoned");
+    23	
+    24	    let gc_watermark = snapshot_tracker.get_seqno_safe_to_gc();
+    25	
+    26	    let flush_lock = task.keyspace.tree.get_flush_lock();
+    27	
+    28	    match task
+    29	        .keyspace
+    30	        .tree
+    24	    );
+    25	
+    26	    let strategy = keyspace.config.compaction_strategy.clone();
+    27	
+    28	    stats.active_compaction_count.fetch_add(1, Relaxed);
+    29	
+    30	        let _tree_operation_lock = keyspace
+    31	        .tree_operation_lock
+    32	        .lock()
+    33	        .expect("lock is poisoned");
+    34	
+    35	    let start = Instant::now();
+    36	
+    37	    if let Err(e) = keyspace
+    38	        .tree
+    39	        .compact(strategy.clone(), snapshot_tracker.get_seqno_safe_to_gc())
+    40	    {
+    41	        log::error!("Compaction failed: {e:?}");
+    42	        stats.active_compaction_count.fetch_sub(1, Relaxed);
+
+ exited 1 in 749ms:
+error: 'cargo-fmt' is not installed for the toolchain 'stable-x86_64-unknown-linux-gnu'.
+help: run `rustup component add rustfmt` to install it
+
+codex
+`rustfmt` is not installed on the remote toolchain, so I’m manually formatting the touched code before compiling. The remaining issues are indentation only, not logic.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'python3 - <<\"PY\"
+from pathlib import Path
+repls = {
+\"src/keyspace/mod.rs\": [
+    (\"        let _tree_operation_lock = self.tree_operation_lock.lock().expect(\\\"lock is poisoned\\\");\",
+     \"        let _tree_operation_lock = self\\n            .tree_operation_lock\\n            .lock()\\n            .expect(\\\"lock is poisoned\\\");\"),
+],
+\"src/flush/worker.rs\": [
+    (\"        let _tree_operation_lock = task\\n        .keyspace\\n        .tree_operation_lock\\n        .lock()\\n        .expect(\\\"lock is poisoned\\\");\",
+     \"    let _tree_operation_lock = task\\n        .keyspace\\n        .tree_operation_lock\\n        .lock()\\n        .expect(\\\"lock is poisoned\\\");\"),
+],
+\"src/compaction/worker.rs\": [
+    (\"        let _tree_operation_lock = keyspace\\n        .tree_operation_lock\\n        .lock()\\n        .expect(\\\"lock is poisoned\\\");\",
+     \"    let _tree_operation_lock = keyspace\\n        .tree_operation_lock\\n        .lock()\\n        .expect(\\\"lock is poisoned\\\");\"),
+],
+}
+for file, pairs in repls.items():
+    p = Path(file)
+    s = p.read_text()
+    for old, new in pairs:
+        s = s.replace(old, new)
+    p.write_text(s)
+PY
+
+grep -n \"tree_operation_lock\" src/keyspace/mod.rs src/ingestion.rs src/flush/worker.rs src/compaction/worker.rs'" in /private/tmp
+ succeeded in 929ms:
+src/keyspace/mod.rs:90:    pub(crate) tree_operation_lock: Mutex<()>,
+src/keyspace/mod.rs:252:        let _tree_operation_lock = self
+src/keyspace/mod.rs:253:            .tree_operation_lock
+src/keyspace/mod.rs:322:            tree_operation_lock: Mutex::default(),
+src/keyspace/mod.rs:365:            tree_operation_lock: Mutex::default(),
+src/keyspace/mod.rs:878:        let _tree_operation_lock = self
+src/keyspace/mod.rs:879:            .tree_operation_lock
+src/ingestion.rs:54:        let _tree_operation_lock = self
+src/ingestion.rs:56:            .tree_operation_lock
+src/flush/worker.rs:18:    let _tree_operation_lock = task
+src/flush/worker.rs:20:        .tree_operation_lock
+src/compaction/worker.rs:30:    let _tree_operation_lock = keyspace
+src/compaction/worker.rs:31:        .tree_operation_lock
+
+codex
+The source is coherent again. I’m running a normal compile check now, then I’ll run the hidden oracle and iterate based on that result.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'cargo check'" in /private/tmp
+ succeeded in 5179ms:
+   Compiling libc v0.2.186
+   Compiling crossbeam-utils v0.8.21
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+    Checking cfg-if v1.0.4
+   Compiling quote v1.0.45
+   Compiling getrandom v0.4.2
+   Compiling rustix v1.1.4
+    Checking scopeguard v1.2.0
+    Checking lock_api v0.4.14
+   Compiling parking_lot_core v0.9.12
+    Checking once_cell v1.21.4
+    Checking bitflags v2.13.0
+    Checking linux-raw-sys v0.12.1
+   Compiling syn v2.0.117
+    Checking crossbeam-epoch v0.9.18
+    Checking byteorder-lite v0.1.0
+    Checking compare v0.0.6
+    Checking hashbrown v0.16.1
+    Checking equivalent v1.0.2
+    Checking twox-hash v2.1.2
+    Checking log v0.4.32
+    Checking xxhash-rust v0.8.15
+    Checking smallvec v1.15.1
+    Checking fastrand v2.4.1
+    Checking quick_cache v0.6.23
+    Checking sfa v1.0.0
+    Checking lz4_flex v0.13.1
+    Checking interval-heap v0.0.5
+    Checking crossbeam-skiplist v0.1.3
+    Checking spin v0.9.8
+    Checking hashbrown v0.14.5
+    Checking varint-rs v2.2.1
+    Checking byteview v0.10.1
+    Checking tempfile v3.27.0
+    Checking rustc-hash v2.1.2
+    Checking self_cell v1.2.2
+    Checking flume v0.12.0
+    Checking dashmap v6.2.1
+   Compiling enum_dispatch v0.3.13
+    Checking lsm-tree v3.1.5
+    Checking fjall v3.1.5 (/home/ec2-user/fjall)
+warning: usage of an `unsafe` block
+   --> src/journal/entry.rs:200:41
+    |
+200 |                         let mut value = unsafe { Slice::builder_unzeroed(value_len as usize) };
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> src/journal/entry.rs:199:32
+    |
+199 |                         #[warn(unsafe_code)]
+    |                                ^^^^^^^^^^^
+
+warning: enum `RecoveryMode` is never used
+  --> src/journal/error.rs:10:10
+   |
+10 | pub enum RecoveryMode {
+   |          ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `stats` is never read
+  --> src/keyspace/mod.rs:86:16
+   |
+60 | pub struct KeyspaceInner {
+   |            ------------- field in this struct
+...
+86 |     pub(crate) stats: Arc<Stats>,
+   |                ^^^^^
+
+warning: field `backpressure_lock` is never read
+  --> src/supervisor.rs:35:16
+   |
+16 | pub struct SupervisorInner {
+   |            --------------- field in this struct
+...
+35 |     pub(crate) backpressure_lock: Mutex<()>,
+   |                ^^^^^^^^^^^^^^^^^
+
+warning: `fjall` (lib) generated 4 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.37s
+
+codex
+`cargo check` passes with existing warnings. I’m running the hidden reproducer/oracle now; if it still fails, I’ll inspect whether there’s another fjall-managed tree mutation that needs the same barrier.
+exec
+/bin/zsh -lc "/tmp/box-sh-hg 'bash /tmp/fj_check.sh'" in /private/tmp
