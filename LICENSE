@@ -1,0 +1,39 @@
+LICENSE
+
+This repository is licensed in two parts.
+
+================================================================================
+1. WRITTEN CONTENT  ->  Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0)
+================================================================================
+
+Copyright (c) 2026 June Kim
+
+All written/research content in this repository, the research writeups,
+hypothesis graphs, methodology documents, work logs, and data, is licensed
+under the Creative Commons Attribution-ShareAlike 4.0 International License.
+
+You are free to Share and Adapt this material, including commercially, under:
+  - Attribution: give appropriate credit, link the license, indicate changes.
+  - ShareAlike: distribute your contributions under the same license (copyleft).
+  - No additional restrictions.
+
+Full legal code: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+Summary:         https://creativecommons.org/licenses/by-sa/4.0/
+SPDX-License-Identifier: CC-BY-SA-4.0
+
+================================================================================
+2. SOURCE CODE  ->  All Rights Reserved
+================================================================================
+
+All source code in this repository, including the fix patches and program
+files under pilots/ (e.g. *.patch and *.rs intended for upstream contribution)
+and the scripts under tools/, is:
+
+  Copyright (c) 2026 June Kim. All Rights Reserved.
+
+The copyleft (ShareAlike) terms above deliberately do NOT apply to this code.
+This is intentional: code offered upstream (e.g. the fix for flux-rs/flux #1613)
+is handed to the receiving project under that project's own license, and a
+ShareAlike obligation would conflict with a permissive upstream license. The
+author retains all rights and grants such licenses directly upon contribution.
+No other license to the source code is granted by this repository.

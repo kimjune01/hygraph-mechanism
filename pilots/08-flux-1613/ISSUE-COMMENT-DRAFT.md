@@ -23,7 +23,7 @@ Evidence it does something: @enjhnsn2's original #1613 program checks, an int-so
 
 The caveat is the part that matters: the field-projection case is a syntactic proxy for "there will be an enclosing fold that rechecks the invariant," and I don't have a proof the proxy is sound — I only tried a few escape shapes and they still reject. So this is either a real lightweight origin-tracking lane or just an approximation that happens to cover this example, and that's the call I can't make from outside the fold machinery.
 
-Branch/PR and a writeup of the dead ends (e.g. just removing the `FoldLocal` check verifies the example but is unsound) are here: `<trail link>`. I used LLM assistance to generate and prune hypotheses during the investigation; the unproven gate above is the part I'd want reviewed most skeptically.
+Branch/PR and a writeup of the dead ends (e.g. just removing the `FoldLocal` check verifies the example but is unsound) are here: https://github.com/kimjune01/hygraph-mechanism/blob/flux-1613-trail-v1/pilots/08-flux-1613/graph_arm/HYPOTHESIS_GRAPH.md . I used LLM assistance to generate and prune hypotheses during the investigation; the unproven gate above is the part I'd want reviewed most skeptically.
 
 ---
 

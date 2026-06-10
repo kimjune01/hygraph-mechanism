@@ -46,7 +46,7 @@ hand-write the patch; the only manual edit was conforming the new map to `UnordM
 is all machine-checkable and rerunnable: the recorded trail (including the constraint dump that
 located the `FoldLocal` obligation and the two dead ends above), an independent pair of receipts
 (a sort-varied positive that a narrower fix rejects, and an unsound `len`-shrinking twin that must
-stay rejected), and `cargo xtask test`. Trail here: <HG link TBD>. I'm the submitter, not the
+stay rejected), and `cargo xtask test`. Trail here: https://github.com/kimjune01/hygraph-mechanism/blob/flux-1613-trail-v1/pilots/08-flux-1613/graph_arm/HYPOTHESIS_GRAPH.md . I'm the submitter, not the
 author of the reasoning, and happy to reshape the borrow-origin tracking if you'd structure it
 differently.
 
