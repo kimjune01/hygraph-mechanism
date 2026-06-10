@@ -1,0 +1,284 @@
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79dff46..f20515fe48 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -291,7 +291,9 @@ fn check_fn_subtyping(
+         .collect_vec();
+ 
+     let mut env = TypeEnv::empty();
+-    let actuals = unfold_local_ptrs(&mut infcx, &mut env, sub_sig.as_ref(), &actuals)?;
++    let borrowed_places = vec![None; actuals.len()];
++    let actuals =
++        unfold_local_ptrs(&mut infcx, &mut env, sub_sig.as_ref(), &actuals, &borrowed_places)?;
+     let actuals = infer_under_mut_ref_hack(&mut infcx, &actuals[..], sub_sig.as_ref());
+ 
+     let output = infcx.ensure_resolved_evars(|infcx| {
+@@ -437,17 +439,18 @@ fn unfold_local_ptrs(
+     env: &mut TypeEnv,
+     fn_sig: &PolyFnSig,
+     actuals: &[Ty],
++    borrowed_places: &[Option<Place>],
+ ) -> InferResult<Vec<Ty>> {
+     // We *only* need to know whether each input is a &strg or not
+     let fn_sig = fn_sig.skip_binder_ref();
+     let mut tys = vec![];
+-    for (actual, input) in izip!(actuals, fn_sig.inputs()) {
++    for (actual, input, borrowed_place) in izip!(actuals, fn_sig.inputs(), borrowed_places) {
+         let actual = if let (
+             TyKind::Indexed(BaseTy::Ref(re, bound, Mutability::Mut), _),
+             TyKind::StrgRef(_, _, _),
+         ) = (actual.kind(), input.kind())
+         {
+-            let loc = env.unfold_local_ptr(infcx, bound)?;
++            let loc = env.unfold_local_ptr(infcx, bound, borrowed_place.clone())?;
+             let path1 = Path::new(loc, rty::List::empty());
+             Ty::ptr(PtrKind::Mut(*re), path1)
+         } else {
+@@ -699,6 +702,9 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                 let ty = self.check_rvalue(infcx, env, stmt_span, rvalue)?;
+                 self.check_assign_ty(infcx, env, place, ty, stmt_span)
+                     .with_span(stmt_span)?;
++                if let Rvalue::Ref(_, BorrowKind::Mut { .. }, borrowed_place) = rvalue {
++                    env.record_borrow(place, borrowed_place);
++                }
+             }
+             StatementKind::SetDiscriminant { .. } => {
+                 // TODO(nilehmann) double check here that the place is unfolded to
+@@ -778,6 +784,10 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                 }
+             }
+             TerminatorKind::Call { kind, args, destination, target, .. } => {
++                let borrowed_places = args
++                    .iter()
++                    .map(|arg| env.borrowed_place_for_operand(arg))
++                    .collect_vec();
+                 let actuals = self
+                     .check_operands(infcx, env, terminator_span, args)
+                     .with_span(terminator_span)?;
+@@ -799,6 +809,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                             fn_sig,
+                             &generic_args,
+                             &actuals,
++                            &borrowed_places,
+                         )?
+                         .output
+                     }
+@@ -816,6 +827,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                                 EarlyBinder(fn_sig.clone()),
+                                 &[],
+                                 &actuals,
++                                &borrowed_places,
+                             )?
+                             .output
+                         } else {
+@@ -892,12 +904,14 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+         fn_sig: EarlyBinder<PolyFnSig>,
+         generic_args: &[GenericArg],
+         actuals: &[Ty],
++        borrowed_places: &[Option<Place>],
+     ) -> Result<ResolvedCall> {
+         let genv = self.genv;
+         let tcx = genv.tcx();
+ 
+         let actuals =
+-            unfold_local_ptrs(infcx, env, fn_sig.skip_binder_ref(), actuals).with_span(span)?;
++            unfold_local_ptrs(infcx, env, fn_sig.skip_binder_ref(), actuals, borrowed_places)
++                .with_span(span)?;
+         let actuals = infer_under_mut_ref_hack(infcx, &actuals, fn_sig.skip_binder_ref());
+         infcx.push_evar_scope();
+ 
+@@ -1497,8 +1511,21 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                     args,
+                 )
+                 .with_span(stmt_span)?;
+-                self.check_call(infcx, env, stmt_span, Some(*def_id), sig, &args, &actuals)
+-                    .map(|resolved_call| resolved_call.output)
++                let borrowed_places = operands
++                    .iter()
++                    .map(|operand| env.borrowed_place_for_operand(operand))
++                    .collect_vec();
++                self.check_call(
++                    infcx,
++                    env,
++                    stmt_span,
++                    Some(*def_id),
++                    sig,
++                    &args,
++                    &actuals,
++                    &borrowed_places,
++                )
++                .map(|resolved_call| resolved_call.output)
+             }
+             Rvalue::Aggregate(AggregateKind::Array(arr_ty), operands) => {
+                 let args = self
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..f781b5532b 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -29,11 +29,11 @@ use flux_middle::{
+ };
+ use flux_rustc_bridge::{
+     self,
+-    mir::{BasicBlock, Body, Local, LocalDecl, LocalDecls, Place, PlaceElem},
++    mir::{BasicBlock, Body, Local, LocalDecl, LocalDecls, Operand, Place, PlaceElem},
+     ty,
+ };
+ use itertools::{Itertools, izip};
+-use rustc_data_structures::unord::UnordMap;
++use rustc_data_structures::{fx::FxHashMap, unord::UnordMap};
+ use rustc_index::{IndexSlice, IndexVec};
+ use rustc_middle::{mir::RETURN_PLACE, ty::TyCtxt};
+ use rustc_span::{Span, Symbol};
+@@ -47,6 +47,7 @@ use super::rty::Sort;
+ pub struct TypeEnv<'a> {
+     bindings: PlacesTree,
+     local_decls: &'a LocalDecls,
++    borrows: FxHashMap<Local, Place>,
+ }
+ 
+ pub struct BasicBlockEnvShape {
+@@ -67,7 +68,11 @@ struct BasicBlockEnvData {
+ 
+ impl<'a> TypeEnv<'a> {
+     pub fn new(infcx: &mut InferCtxt, body: &'a Body, fn_sig: &FnSig) -> TypeEnv<'a> {
+-        let mut env = TypeEnv { bindings: PlacesTree::default(), local_decls: &body.local_decls };
++        let mut env = TypeEnv {
++            bindings: PlacesTree::default(),
++            local_decls: &body.local_decls,
++            borrows: FxHashMap::default(),
++        };
+ 
+         for requires in fn_sig.requires() {
+             infcx.assume_pred(requires);
+@@ -88,7 +93,11 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub fn empty() -> TypeEnv<'a> {
+-        TypeEnv { bindings: PlacesTree::default(), local_decls: IndexSlice::empty() }
++        TypeEnv {
++            bindings: PlacesTree::default(),
++            local_decls: IndexSlice::empty(),
++            borrows: FxHashMap::default(),
++        }
+     }
+ 
+     fn alloc_with_ty(&mut self, local: Local, ty: Ty) {
+@@ -230,13 +239,31 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+-        for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++        for (loc, bound, ty, borrowed_place) in self.bindings.local_ptrs() {
++            if let Some(borrowed_place) = borrowed_place.filter(has_field_projection) {
++                self.bindings.lookup(&borrowed_place, infcx.span).update(ty);
++            } else {
++                infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            }
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+     }
+ 
++    pub(crate) fn record_borrow(&mut self, place: &Place, borrowed_place: &Place) {
++        if place.projection.is_empty() {
++            self.borrows.insert(place.local, borrowed_place.clone());
++        }
++    }
++
++    pub(crate) fn borrowed_place_for_operand(&self, operand: &Operand) -> Option<Place> {
++        let place = match operand {
++            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => place,
++            _ => return None,
++        };
++        self.borrows.get(&place.local).cloned()
++    }
++
+     /// Updates the type of `place` to `new_ty`. This may involve a *strong update* if we have
+     /// ownership of `place` or a *weak update* if it's behind a reference (which fires a subtyping
+     /// constraint)
+@@ -324,12 +351,13 @@ impl<'a> TypeEnv<'a> {
+         &mut self,
+         infcx: &mut InferCtxt,
+         bound: &Ty,
++        borrowed_place: Option<Place>,
+     ) -> InferResult<Loc> {
+         let name = infcx.define_unknown_var(&Sort::Loc);
+         let loc = Loc::from(name);
+         let ty = infcx.unpack(bound);
+         self.bindings
+-            .insert(loc, LocKind::LocalPtr(bound.clone()), ty);
++            .insert(loc, LocKind::LocalPtr { bound: bound.clone(), borrowed_place }, ty);
+         Ok(loc)
+     }
+ 
+@@ -420,6 +448,13 @@ impl<'a> TypeEnv<'a> {
+     }
+ }
+ 
++fn has_field_projection(place: &Place) -> bool {
++    place
++        .projection
++        .iter()
++        .any(|elem| matches!(elem, PlaceElem::Field(_)))
++}
++
+ pub(crate) enum PtrToRefBound {
+     Ty(Ty),
+     Infer,
+@@ -449,7 +484,7 @@ impl flux_infer::infer::LocEnv for TypeEnv<'_> {
+ 
+ impl BasicBlockEnvShape {
+     pub fn enter<'a>(&self, local_decls: &'a LocalDecls) -> TypeEnv<'a> {
+-        TypeEnv { bindings: self.bindings.clone(), local_decls }
++        TypeEnv { bindings: self.bindings.clone(), local_decls, borrows: FxHashMap::default() }
+     }
+ 
+     fn new(scope: Scope, env: TypeEnv) -> BasicBlockEnvShape {
+@@ -824,7 +859,7 @@ impl BasicBlockEnv {
+         for constr in &data.constrs {
+             infcx.assume_pred(constr);
+         }
+-        TypeEnv { bindings: data.bindings, local_decls }
++        TypeEnv { bindings: data.bindings, local_decls, borrows: FxHashMap::default() }
+     }
+ 
+     pub(crate) fn scope(&self) -> &Scope {
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..b2d27e2b24 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -35,7 +35,7 @@ pub(crate) enum LocKind {
+     Local,
+     Box(GenericArg),
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+-    LocalPtr(Ty),
++    LocalPtr { bound: Ty, borrowed_place: Option<Place> },
+     Universal,
+ }
+ 
+@@ -292,12 +292,12 @@ impl PlacesTree {
+         self.map.shift_remove(loc);
+     }
+ 
+-    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Ty)> {
++    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Ty, Option<Place>)> {
+         self.map
+             .iter()
+             .filter_map(|(loc, binding)| {
+-                if let LocKind::LocalPtr(bound) = &binding.kind {
+-                    Some((*loc, bound.clone(), binding.ty.clone()))
++                if let LocKind::LocalPtr { bound, borrowed_place } = &binding.kind {
++                    Some((*loc, bound.clone(), binding.ty.clone(), borrowed_place.clone()))
+                 } else {
+                     None
+                 }
+@@ -961,7 +961,7 @@ mod pretty {
+             match self {
+                 LocKind::Local | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+-                LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::LocalPtr { bound, .. } => w!(cx, f, "[local-ptr({:?})]", bound),
+             }
+         }
+     }
