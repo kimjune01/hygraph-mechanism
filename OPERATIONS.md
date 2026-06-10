@@ -138,9 +138,23 @@ The core existence proof needs only **+M vs craft-only**; run the full ladder on
 the high-prior 3 plus a sample. These are the only relevant ablations.
 
 Capture **source-only** diffs (strip test-file hunks, build/runtime blobs,
-oversized hunks). An arm must **not** edit the gold test. Grade each arm against
-the **fixed** merged test on a **fresh** checkout. The harness's internal gate is
-a stop signal only; the merged test is the verdict.
+oversized hunks). An arm must **not** edit the gold test. Grade each arm on a
+**fresh** checkout. The harness's internal gate is a stop signal only.
+
+**The oracle is the issue's ESSENCE, authored from the upstream issue — NOT the
+PR's shipped test** (pilot 02). The pool's PRs are the agentic pipeline's own
+output, so their shipped tests are pipeline-authored and over-specified; grading
++M against them is circular (the mechanism graded against a test the mechanism
+wrote) and reproduces the SWE-bench-Pro over-credit failure mode. What the merge
+buys is third-party confirmation that the bug is real and was fixed acceptably —
+not a license to use the pipeline's test as the bar. So per instance, author a
+**minimal essence oracle** capturing the behavior the *issue* (third-party) states,
+and drop the maintainer/pipeline rigor the issue never asked for (in pilot 02:
+`Vary: Accept`, `*/*` exclusion, media-type-variant exactness were all PR-side
+additions, not in issue #301). The shipped test is downgraded to a *reference*.
+**Existence requires craft-only to fail the ESSENCE, not the strict gold.**
+A null under essence-grading (craft-only already captures the essence) is a
+committed result, not a discard.
 
 **Craft gets a run-handle, not the test body.** Expose the failing test to craft as
 a pass/fail signal it can run, not as source in the prompt. If the assertion body

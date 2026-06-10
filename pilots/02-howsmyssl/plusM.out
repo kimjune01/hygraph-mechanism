@@ -1,0 +1,14 @@
+Verdict: PASS
+
+Changed [howsmyssl.go](</home/ec2-user/pipe/jmhodges_howsmyssl_work/howsmyssl.go>): `commonRedirect`, plus new helpers `acceptsJSON`, `addVaryAccept`, `redirectURL`, and `writeJSONRedirect`.
+
+Fix: non-canonical redirects now vary on `Accept`. For `/a/check` requests whose `Accept` headers explicitly include `application/json`, the 301 response is emitted with `Content-Type: application/json`, `Location`, `Content-Length`, and body `{}`. Browser-style wildcard accepts still fall through to Go’s normal HTML redirect body.
+
+Validation: `/tmp/box-sh 'bash /tmp/jmhodges_howsmyssl_check.sh'` prints `CHECK: PASS ()`.
+
+Requested stat command output: `/tmp/box-sh 'cd .. && git diff --stat'` is not inside a git repo in this environment and prints Git’s “Not a git repository” usage message. Repository-local stat is:
+
+```text
+ howsmyssl.go | 57 ++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 52 insertions(+), 5 deletions(-)
+```

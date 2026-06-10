@@ -1,0 +1,19 @@
+Verdict: FAIL. Hidden oracle still prints `CHECK: FAIL ()`.
+
+Changed [howsmyssl.go](placeholder): `commonRedirect`, added `redirect`, `acceptsJSON`, and `parseAcceptPart`.
+
+Fix description: `commonRedirect` now routes through a JSON-aware redirect helper. For `/a/check` or requests explicitly accepting JSON, the 301 response sets `Location`, `Content-Type: application/json`, CORS headers, and returns `{}` for GET instead of Go’s default HTML redirect body. Non-JSON redirects still use `http.Redirect`.
+
+Visible verification: `go test ./...` passes. Hidden check fails.
+
+Final `/tmp/box-sh 'cd .. && git diff --stat'` output:
+```text
+warning: Not a git repository. Use --no-index to compare two paths outside a working tree
+usage: git diff --no-index [<options>] <path> <path>
+```
+
+Repo-local `git diff --stat`:
+```text
+howsmyssl.go | 51 ++++++++++++++++++++++++++++++++++++++++++++++++++-
+1 file changed, 50 insertions(+), 1 deletion(-)
+```

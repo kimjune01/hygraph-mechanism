@@ -1,0 +1,72 @@
+diff --git a/howsmyssl.go b/howsmyssl.go
+index 0ba623d5..293e4a65 100644
+--- a/howsmyssl.go
++++ b/howsmyssl.go
+@@ -482,15 +482,62 @@ func healthcheck(w http.ResponseWriter, r *http.Request) {
+ func commonRedirect(redirectHost string) http.Handler {
+ 	hf := func(w http.ResponseWriter, r *http.Request) {
+ 		commonRedirects.Add(1)
+-		u := r.URL
+-		// Never set by the Go HTTP library.
+-		u.Scheme = "https"
+-		u.Host = redirectHost
+-		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
++		if len(r.Header.Values("Accept")) > 0 {
++			addVaryAccept(w.Header())
++		}
++		u := redirectURL(r, redirectHost)
++		if r.URL.Path == "/a/check" && acceptsJSON(r) {
++			writeJSONRedirect(w, r, u)
++			return
++		}
++		http.Redirect(w, r, u, http.StatusMovedPermanently)
+ 	}
+ 	return http.HandlerFunc(hf)
+ }
+ 
++func acceptsJSON(r *http.Request) bool {
++	for _, header := range r.Header.Values("Accept") {
++		for _, accept := range strings.Split(header, ",") {
++			mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(accept, ";", 2)[0]))
++			if mediaType == "application/json" {
++				return true
++			}
++		}
++	}
++
++	return false
++}
++
++func addVaryAccept(h http.Header) {
++	for _, vary := range h.Values("Vary") {
++		for _, value := range strings.Split(vary, ",") {
++			if strings.EqualFold(strings.TrimSpace(value), "Accept") {
++				return
++			}
++		}
++	}
++	h.Add("Vary", "Accept")
++}
++
++func redirectURL(r *http.Request, redirectHost string) string {
++	u := r.URL
++	// Never set by the Go HTTP library.
++	u.Scheme = "https"
++	u.Host = redirectHost
++	return u.String()
++}
++
++func writeJSONRedirect(w http.ResponseWriter, r *http.Request, location string) {
++	body := []byte("{}")
++	defaultResponseHeaders(w.Header(), r, "application/json")
++	w.Header().Set("Location", location)
++	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
++	w.WriteHeader(http.StatusMovedPermanently)
++	if r.Method != http.MethodHead {
++		w.Write(body)
++	}
++}
++
+ func loadIndex() *template.Template {
+ 	return template.Must(template.New("index.html").
+ 		Funcs(template.FuncMap{"sentence": sentence, "ratingSpan": ratingSpan}).
