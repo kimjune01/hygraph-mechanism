@@ -4,3 +4,5 @@
 {"repo": "apache/airflow", "pr": 66686, "verdict": "PASS"}
 {"repo": "jmhodges/howsmyssl", "pr": 1005, "verdict": "PASS"}
 {"repo": "stacklok/toolhive", "pr": 5256, "verdict": "PASS"}
+{"repo": "sorairolake/qrtool", "pr": 1002, "verdict": "PASS"}
+{"repo": "wild-linker/wild", "pr": 1924, "verdict": "FAIL"}

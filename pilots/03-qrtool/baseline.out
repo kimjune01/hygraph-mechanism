@@ -1,0 +1,12 @@
+Verdict: PASS
+
+Changed `src/app.rs`, function `run()` in the `Command::Decode` branch.
+
+The fix makes decode failures explicit when no QR grids/content are found after both the normal scan and the inverted-image fallback. Instead of returning success with empty stdout, `qrtool decode` now returns an error: `could not find a QR code in the image`. Valid QR decoding still works, and `cargo check` passes. `cargo fmt --check` could not run because rustfmt is not installed on the remote toolchain.
+
+`git diff --stat`:
+
+```text
+src/app.rs | 6 +++++-
+1 file changed, 5 insertions(+), 1 deletion(-)
+```

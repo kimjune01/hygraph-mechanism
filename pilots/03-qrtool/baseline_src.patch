@@ -1,0 +1,24 @@
+diff --git a/src/app.rs b/src/app.rs
+index 2808748..a48a2c2 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -10,7 +10,7 @@ use std::{
+     num::NonZeroU32,
+ };
+ 
+-use anyhow::Context;
++use anyhow::{Context, anyhow};
+ use clap::Parser;
+ use image::{ImageFormat, imageops};
+ #[cfg(feature = "optimize-output-png")]
+@@ -227,6 +227,10 @@ pub fn run() -> anyhow::Result<()> {
+                 Ok(contents) => contents,
+             };
+ 
++            if contents.is_empty() {
++                return Err(anyhow!("could not find a QR code in the image"));
++            }
++
+             for content in contents {
+                 if arg.verbose || arg.metadata {
+                     let metadata = content.0.metadata();
