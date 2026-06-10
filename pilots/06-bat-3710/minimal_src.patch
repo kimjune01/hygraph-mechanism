@@ -1,0 +1,50 @@
+diff --git a/src/bin/bat/app.rs b/src/bin/bat/app.rs
+index 3124cdcd..b86da3d6 100644
+--- a/src/bin/bat/app.rs
++++ b/src/bin/bat/app.rs
+@@ -570,8 +570,17 @@ impl App {
+         Ok(file_input)
+     }
+ 
++    fn decorations_enabled(&self) -> bool {
++        match self.matches.get_one::<String>("decorations").map(|s| s.as_str()) {
++            Some("always") => true,
++            Some("never") => false,
++            Some("auto") | None => self.interactive_output,
++            _ => unreachable!("other values for --decorations are not allowed"),
++        }
++    }
++
+     fn forced_style_components(&self) -> Option<StyleComponents> {
+-        // No components if `--decorations=never``.
++        // No components if `--decorations=never`.
+         if self
+             .matches
+             .get_one::<String>("decorations")
+@@ -588,6 +597,10 @@ impl App {
+             ])));
+         }
+ 
++        if !self.decorations_enabled() {
++            return Some(StyleComponents(HashSet::new()));
++        }
++
+         // Plain if `--plain` is specified at least once.
+         if self.matches.get_count("plain") > 0 {
+             let mut components = HashSet::from([StyleComponent::Plain]);
+@@ -620,13 +633,13 @@ impl App {
+                     .map(|v| StyleComponentList::from_str(v))
+                     .collect::<Result<Vec<StyleComponentList>>>()?;
+ 
+-                StyleComponentList::to_components(lists, self.interactive_output, true)
++                StyleComponentList::to_components(lists, self.decorations_enabled(), true)
+             }
+ 
+             // Use the default.
+             None => StyleComponents(HashSet::from_iter(
+                 StyleComponent::Default
+-                    .components(self.interactive_output)
++                    .components(self.decorations_enabled())
+                     .iter()
+                     .cloned(),
+             )),

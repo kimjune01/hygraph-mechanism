@@ -1,0 +1,63 @@
+diff --git a/src/bin/bat/app.rs b/src/bin/bat/app.rs
+index 3124cdcd..e65834d0 100644
+--- a/src/bin/bat/app.rs
++++ b/src/bin/bat/app.rs
+@@ -371,7 +371,7 @@ impl App {
+                 }
+             });
+ 
+-        Ok(Config {
++        let mut config = Config {
+             true_color: is_truecolor_terminal(),
+             language: self
+                 .matches
+@@ -521,7 +521,13 @@ impl App {
+             } else {
+                 None
+             },
+-        })
++        };
++
++        if self.should_suppress_decorations() {
++            Self::remove_decorations(&mut config.style_components);
++        }
++
++        Ok(config)
+     }
+ 
+     pub fn inputs(&self) -> Result<Vec<Input<'_>>> {
+@@ -607,6 +613,34 @@ impl App {
+         None
+     }
+ 
++    fn decorations_enabled(&self) -> bool {
++        self.matches.get_flag("force-colorization")
++            || match self.matches.get_one::<String>("decorations").map(|s| s.as_str()) {
++                Some("always") => true,
++                Some("never") => false,
++                Some("auto") => self.interactive_output,
++                _ => unreachable!("other values for --decorations are not allowed"),
++            }
++    }
++
++    fn should_suppress_decorations(&self) -> bool {
++        !self.decorations_enabled() && !self.matches.get_flag("number")
++    }
++
++    fn remove_decorations(style_components: &mut StyleComponents) {
++        style_components.0.retain(|component| match component {
++            #[cfg(feature = "git")]
++            StyleComponent::Changes => false,
++            StyleComponent::Grid
++            | StyleComponent::Rule
++            | StyleComponent::HeaderFilename
++            | StyleComponent::HeaderFilesize
++            | StyleComponent::LineNumbers
++            | StyleComponent::Snip => false,
++            _ => true,
++        });
++    }
++
+     fn style_components(&self) -> Result<StyleComponents> {
+         let matches = &self.matches;
+         let mut styled_components = match self.forced_style_components() {
