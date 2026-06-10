@@ -1,0 +1,43 @@
+diff --git a/crates/flux-fhir-analysis/src/wf/mod.rs b/crates/flux-fhir-analysis/src/wf/mod.rs
+index be730673f0..0619652b38 100644
+--- a/crates/flux-fhir-analysis/src/wf/mod.rs
++++ b/crates/flux-fhir-analysis/src/wf/mod.rs
+@@ -361,6 +361,13 @@ impl<'a, 'genv, 'tcx> Wf<'a, 'genv, 'tcx> {
+ }
+ 
+ impl<'genv> fhir::visit::Visitor<'genv> for Wf<'_, 'genv, '_> {
++    fn visit_fn_sig(&mut self, sig: &fhir::FnSig<'genv>) {
++        self.visit_fn_decl(sig.decl);
++        if let Some(expr) = sig.no_panic_if {
++            self.check_expr(&expr, &rty::Sort::Bool);
++        }
++    }
++
+     fn visit_qualifier(&mut self, qual: &fhir::Qualifier<'genv>) {
+         self.check_expr(&qual.expr, &rty::Sort::Bool);
+     }
+diff --git a/crates/flux-middle/src/fhir/visit.rs b/crates/flux-middle/src/fhir/visit.rs
+index a46c526120..38d7ef630c 100644
+--- a/crates/flux-middle/src/fhir/visit.rs
++++ b/crates/flux-middle/src/fhir/visit.rs
+@@ -391,6 +391,9 @@ pub fn walk_where_predicate<'v, V: Visitor<'v>>(vis: &mut V, predicate: &WhereBo
+ 
+ pub fn walk_fn_sig<'v, V: Visitor<'v>>(vis: &mut V, sig: &FnSig<'v>) {
+     vis.visit_fn_decl(sig.decl);
++    if let Some(expr) = sig.no_panic_if {
++        vis.visit_expr(&expr);
++    }
+ }
+ 
+ pub fn walk_fn_decl<'v, V: Visitor<'v>>(vis: &mut V, decl: &FnDecl<'v>) {
+diff --git a/tests/tests/pos/surface/no_panic07.rs b/tests/tests/pos/surface/no_panic07.rs
+new file mode 100644
+index 0000000000..c8e34ada2d
+--- /dev/null
++++ b/tests/tests/pos/surface/no_panic07.rs
+@@ -0,0 +1,5 @@
++#[flux::no_panic_if(n != 0)]
++#[flux::sig(fn(x: i32[@n]) -> i32[9])]
++fn foo(_x: i32) -> i32 {
++    9
++}

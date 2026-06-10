@@ -1,0 +1,44 @@
+You are a software engineer fixing a bug in the flux-rs/flux refinement type checker. You are in the repository (current directory) on this machine; use normal shell commands. Do NOT browse the web. Edit only what the fix needs.
+
+THE ISSUE (verbatim from GitHub, this is all you are given):
+-----
+Title: ICE in `conv/mod.rs` when referencing refinements in `no_panic_if` `Expr`s
+
+Consider:
+
+```
+#[flux_rs::no_panic_if(n != 0)]
+#[flux_rs::sig(fn (x: i32[@n]) -> i32[9])]
+fn foo(x: i32) -> i32 {
+    if x == 0 {
+        panic!("AHH!");
+    }
+    9
+}
+```
+
+When running this, we get:
+
+```
+
+error: internal compiler error: crates/flux-fhir-analysis/src/conv/mod.rs:224:32: node without elaborated sort for `FhirId { owner: Rust(Local(DefId(0:3 ~ no_panic07[818a]::foo))), local_id: 10 }`
+
+
+thread 'rustc' (121173246) panicked at crates/flux-fhir-analysis/src/conv/mod.rs:224:32:
+Box<dyn Any>
+
+```
+
+You can kind of get around the problem temporarily by moving the `n != 0` to a `requires` clause, but the point of the `no_panic_if` annotations are that you can express special preconditions that are optional if you don't care about panicking.
+
+-----
+
+YOUR TASK: fix the bug in the flux SOURCE, and add a regression TEST that guards the fix.
+
+Repo facts you can rely on (not part of the diagnosis):
+- flux's UI tests live in `tests/tests/`: `tests/tests/pos/` holds programs that should type-check successfully; `tests/tests/neg/` holds programs that should be rejected (with `//~ ERROR` annotations on the offending lines).
+- Build+install flux after a source change: `cargo xtask install` (a few minutes).
+- Run flux on a single file: `flux --crate-type=lib FILE.rs`.
+- Run the test suite: `cargo xtask test`.
+
+You may build and run flux as much as you need to verify your own work. Decide for yourself what the correct behavior should be and make flux do it, then add a test that captures it. When you believe the fix is correct and the test guards it, stop. Final message: a short summary of (a) the root cause, (b) your fix, (c) the test you added and where, and (d) `git diff --stat`. This is a report for the orchestrator.
