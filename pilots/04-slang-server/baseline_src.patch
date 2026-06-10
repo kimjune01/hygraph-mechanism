@@ -1,0 +1,30 @@
+diff --git a/src/util/Markdown.cpp b/src/util/Markdown.cpp
+index aa8cc9f..c3a31c2 100644
+--- a/src/util/Markdown.cpp
++++ b/src/util/Markdown.cpp
+@@ -51,7 +51,24 @@ Paragraph& Paragraph::appendText(std::string_view text) {
+ }
+ 
+ Paragraph& Paragraph::appendCode(std::string_view code) {
+-    fmt::format_to(std::back_inserter(buffer), "`{}`", code);
++    size_t maxBacktickRun = 0;
++    size_t currentRun = 0;
++    for (char c : code) {
++        if (c == '\x60') {
++            maxBacktickRun = std::max(maxBacktickRun, ++currentRun);
++        }
++        else {
++            currentRun = 0;
++        }
++    }
++
++    const std::string delimiter(maxBacktickRun + 1, '\x60');
++    if (maxBacktickRun == 0) {
++        fmt::format_to(std::back_inserter(buffer), "{}{}{}", delimiter, code, delimiter);
++    }
++    else {
++        fmt::format_to(std::back_inserter(buffer), "{} {} {}", delimiter, code, delimiter);
++    }
+     return *this;
+ }
+ 

@@ -1,0 +1,13 @@
+Verdict: PASS
+
+Changed `src/util/Markdown.cpp`, function `server::markup::Paragraph::appendCode`.
+
+The fix makes inline code markdown choose a backtick delimiter longer than the longest consecutive backtick run in the content. Existing normal inline code still renders without padding, while code containing backticks is wrapped with a longer delimiter and one space of padding so SystemVerilog macro text like `` `define ... `` and token-paste sequences with triple backticks render correctly.
+
+Verification: `/tmp/box-sh 'bash /tmp/ss_check.sh'` returned `CHECK: PASS (render-correct on both issue inputs)`.
+
+`git diff --stat`:
+```text
+ src/util/Markdown.cpp | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+```
