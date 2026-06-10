@@ -1,3 +1,85 @@
+# Hypothesis graph: flux-rs/flux #1613
+
+From symptom to fix on a refinement-type-checker bug: a composite-sort abstract refinement updated
+through a mutably reborrowed struct field. Every node below is a replayable trial (a hypothesis, an
+exact perturbation, the observed output, a trajectory classification, a kill-or-confirm verdict, and
+the reasoning mode). Dead ends are kept, not hidden: each kill condition generates the next edge.
+
+```mermaid
+flowchart TD
+    classDef killed fill:#ffe1e1,stroke:#cc3333,color:#5c0000;
+    classDef confirmed fill:#e2f6e6,stroke:#2f9e44,color:#0a3d1a;
+    classDef refined fill:#fff3cc,stroke:#c99a1f,color:#5c4500;
+    classDef audit fill:#e3ecff,stroke:#3366cc,color:#0a1f66;
+
+    subgraph P1["① Localize"]
+        direction TB
+        H0["H0 · symptom owned by flux-refineck fold checking"]:::confirmed
+        H1["H1 · standalone run is a boilerplate error"]:::killed
+        H2["H2 · exact E0999 red baseline reproduced"]:::confirmed
+        H0 --> H1 --> H2
+    end
+
+    subgraph P2["② Differential narrowing"]
+        direction TB
+        H3["H3 · Fold vs FoldLocal · span alone insufficient"]:::refined
+        H4["H4 · 'any setter call fails' refuted"]:::killed
+        H5["H5 · scalar version verifies"]:::killed
+        H6["H6 · direct &strg mutation verifies"]:::killed
+        H3 --> H4 & H5 & H6
+    end
+
+    subgraph P3["③ Root cause"]
+        direction TB
+        H7["H7 · constraint dump: FoldLocal is the live obligation"]:::confirmed
+        H8["H8 · provenance: inherited coarse local-fold rule"]:::confirmed
+        H7 --> H8
+    end
+
+    subgraph P4["④ Fix"]
+        direction TB
+        H9["H9 · edit tested on installed binary is non-evidence"]:::killed
+        H10["H10 · dropping FoldLocal check is unsound"]:::killed
+        H11["H11 · write callee post-state back to field origin"]:::confirmed
+        H12["H12 · two-field invariant generalizes"]:::confirmed
+        H13["H13 · permanent pos/neg tests"]:::confirmed
+        H14["H14 · propagate-for-all breaks local_ptr00"]:::killed
+        H15["H15 · gate on field projection (load-bearing step)"]:::confirmed
+        H9 --> H10 --> H11 --> H12 --> H13 --> H14 --> H15
+    end
+
+    subgraph P5["⑤ Verify"]
+        direction TB
+        H16["H16 · basic suite green"]:::confirmed
+        H17["H17 · with-deps suite green"]:::confirmed
+        H18["H18 · formatting-neutral"]:::confirmed
+        H16 --> H17 --> H18
+    end
+
+    subgraph P6["⑥ Merge-readiness · operator probes"]
+        MR["H19-H24 · composition, nested fields, plain-&mut preserved,<br/>int-sort receipt, UnordMap convention, full suite 0-failed"]:::confirmed
+    end
+
+    subgraph P7["⑦ Dual-judge audit · Opus 4.8 + GPT-5.5, blind"]
+        direction TB
+        H25["H25 · both families converge: field-projection gate is unproven"]:::audit
+        H26["H26 · escape probes all reject; residual is the unproven equivalence"]:::audit
+        H25 --> H26
+    end
+
+    H2 --> H3
+    H4 & H5 & H6 --> H7
+    H8 --> H9
+    H15 --> H16
+    H18 --> MR --> H25
+```
+
+**Legend.** Green is confirmed, red is killed (a dead end mined for its edge), amber is refined,
+blue is the independent dual-judge audit. H0 to H18 are the investigating agent's nodes; H19 to H24
+are operator-run merge-readiness probes; H25 and H26 are a blind audit by Opus 4.8 and GPT-5.5.
+
+---
+
 ## H0: The reported symptom is emitted by the fold-checking path in `flux-refineck`
 - null: Grepping the repository would show the message is emitted by unrelated code or many independent paths.
 - perturbation: `pwd && rg --files | head -100 && rg -n "type invariant may not hold|when place is folded|place is folded|E0999" .`
@@ -180,7 +262,7 @@ discipline; provenance explicitly labeled "(operator)". Every command is replaya
 - kill/confirm: confirmed. The H15 narrowing holds on a fresh program, not only the suite's `local_ptr00`.
 - mode: deduction (98%)
 
-## H22: The fix is sort-agnostic — the discriminating int-composite receipt verifies, the unsound twin is rejected
+## H22: The fix is sort-agnostic: the discriminating int-composite receipt verifies, the unsound twin is rejected
 - null: An int-sort composite (`refined_by(len: int, val: int)`, setter `ensures Slot[n, v+1]`) is rejected, showing the fix is keyed to function sorts after all.
 - perturbation: (operator) `receipt_int.rs` (same reborrow shape, plain int components) and `receipt_unsound.rs` (setter shrinks `len`, must fail `slot.len > 0`) on this fix and on a competing fix gated on a `Sort::Func` field.
 - observed: this fix VERIFIES `receipt_int.rs` and REJECTS `receipt_unsound.rs` (E0999). The over-narrow fix REJECTS `receipt_int.rs`. The repair targets the root obligation (H11), so it is sort-agnostic by construction.
