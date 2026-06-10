@@ -61,3 +61,13 @@ So the pipeline ROUTES easy/reproducible bugs past the graph, and our pool (merg
 Existence-case condition (precise): reproducible (passes repro filter, gradeable) + cause hidden/non-local (NOT fix-ready) + terse report (issue does not hand over example/fix). Triage admits these (clear-repro scores +5 regardless of cause-hiddenness) but does not prioritize them, so a few leak into the merged pool.
 
 Reframe: the right pool is NOT merged fix-ready PRs; it is issues the pipeline sent to /investigate (graph-built) that were reproducible-but-hidden-cause. For now hunting the leaked ones: tidb #42770 (reproducible SQL panic, two-path scalar+vectorized fix -> not fix-ready). Gold-grading on gobox.
+
+### 22:30 - Pilot 05 (fjall #287, WILD pipeline-skipped race): NULL. The headline is the minimal agent's REACH.
+
+Took the hunt out of the merged pool to a genuinely hard, OPEN, pipeline-SKIPPED bug: a clear()/ingestion data race in the fjall LSM engine (the triage graph itself rejected it as "too complex for first contribution"). Reproducible, hidden non-local cause, terse Svix report. Two arms in parallel on two boxes, codex GPT-5.5 both, no golden (oracle = the reproducer surviving N time-windows). Budget removed via session-resume loops (per user: turn budget is fake; cost ~10x under a human dev).
+
+Result: NULL. BOTH arms produced real synchronization fixes that pass 6x70s. Graph arm = diagnosis-complete (lock clear vs ingestion+flush+compaction); minimal arm = narrower (clear vs ingestion). A gap-exposer built to crack minimal's narrower fix held 4/4 (background compaction never accumulates under continuous clear). By every empirical test the fixes are equivalent.
+
+5 instances, 0 existence cases. The honest synthesis: the graph is not decoration, but it's also not pass/fail-necessary, for two compounding reasons: (1) selection artifact - the pipeline's triage routes easy/reproducible bugs past the graph; (2) BASELINE REACH - GPT-5.5 through the minimal mini-SWE-agent scaffold diagnosed and fixed a real storage-engine race that the pipeline skipped. The baseline is far stronger than assumed; that, not graph weakness, is why the graph rarely changes the verdict. Graph's residual demonstrated value collapsed to fix COMPLETENESS (more paths locked), which a single-reproducer oracle cannot score. Untested regimes: the review/audit loop, and localization-bottleneck bugs.
+
+fjall #287 fix is validated and PR-ready (pilots/05-fjall-287/PR-READY.md + graph_src.patch); open when a box is up. Boxes torn down.
