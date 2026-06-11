@@ -1,0 +1,146 @@
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79df..cf483b3 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -1988,7 +1988,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+             GhostStatement::Unfold(place) => {
+                 env.unfold(infcx, place, span)?;
+             }
+-            GhostStatement::Unblock(place) => env.unblock(infcx, place),
++            GhostStatement::Unblock(place) => env.unblock(infcx, place, span),
+             GhostStatement::PtrToRef(place) => {
+                 env.ptr_to_ref_at_place(&mut infcx.at(span), place)?;
+             }
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..0103b70 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -20,8 +20,8 @@ use flux_middle::{
+     queries::QueryResult,
+     rty::{
+         BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FnSig, GenericArg, HoleKind,
+-        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, SortCtor, SubsetTy, Ty,
+-        TyKind, VariantIdx,
++        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Ref, Region, SortCtor, SubsetTy,
++        Ty, TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+         region_matching::{rty_match_regions, ty_match_regions},
+@@ -142,10 +142,27 @@ impl<'a> TypeEnv<'a> {
+         if result.is_strg && mutbl == Mutability::Mut {
+             Ok(Ty::ptr(PtrKind::Mut(re), result.path()))
+         } else {
+-            // FIXME(nilehmann) we should block the place here. That would require a notion
+-            // of shared vs mutable block types because sometimes blocked places from a shared
+-            // reference never get unblocked and we should still allow reads through them.
+-            Ok(Ty::mk_ref(re, result.ty, mutbl))
++            let ty = result.ty.clone();
++            drop(result);
++            if mutbl == Mutability::Mut
++                && let Some(ref_place) = place_prefix_before_deref(place)
++                && let Ref!(_, _, Mutability::Mut) = self
++                    .bindings
++                    .lookup_unfolding(infcx, &ref_place, span)?
++                    .ty
++                    .kind()
++            {
++                let name = infcx.define_unknown_var(&Sort::Loc);
++                let loc = Loc::from(name);
++                let ty = infcx.unpack(&ty);
++                self.bindings.insert_reborrow(loc, ref_place, ty);
++                Ok(Ty::ptr(PtrKind::Mut(re), Path::from(loc)))
++            } else {
++                // FIXME(nilehmann) we should block the place here. That would require a notion
++                // of shared vs mutable block types because sometimes blocked places from a shared
++                // reference never get unblocked and we should still allow reads through them.
++                Ok(Ty::mk_ref(re, ty, mutbl))
++            }
+         }
+     }
+ 
+@@ -284,7 +301,22 @@ impl<'a> TypeEnv<'a> {
+             .fmap_mut(|_loc, ty| infcx.hoister(true).hoist(ty));
+     }
+ 
+-    pub(crate) fn unblock(&mut self, infcx: &mut InferCtxt, place: &Place) {
++    pub(crate) fn unblock(&mut self, infcx: &mut InferCtxt, place: &Place, span: Span) {
++        if let Some(ref_place) = place_prefix_before_deref(place)
++            && let Some((_, ty)) = self.bindings.take_reborrow(&ref_place)
++        {
++            let ty = ty.unblocked();
++            let lookup = self.bindings.lookup_unfolding(infcx, &ref_place, span);
++            if let Ok(lookup) = lookup {
++                let re = if let Ref!(re, _, Mutability::Mut) = lookup.ty.kind() {
++                    *re
++                } else {
++                    return;
++                };
++                lookup.update(Ty::mk_ref(re, ty, Mutability::Mut));
++                return;
++            }
++        }
+         self.bindings.unblock(infcx, place);
+     }
+ 
+@@ -893,6 +925,16 @@ mod pretty {
+     }
+ }
+ 
++fn place_prefix_before_deref(place: &Place) -> Option<Place> {
++    if matches!(place.projection.last(), Some(PlaceElem::Deref)) {
++        let mut place = place.clone();
++        place.projection.pop();
++        Some(place)
++    } else {
++        None
++    }
++}
++
+ /// A very explicit representation of [`TypeEnv`] for debugging/tracing/serialization ONLY.
+ #[derive(Serialize, DebugAsJson)]
+ pub struct TypeEnvTrace(Vec<TypeEnvBind>);
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..a484b2e 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -36,6 +36,8 @@ pub(crate) enum LocKind {
+     Box(GenericArg),
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+     LocalPtr(Ty),
++    // A temporary strong location created when reborrowing through an &mut place.
++    Reborrow(Place),
+     Universal,
+ }
+ 
+@@ -305,6 +307,23 @@ impl PlacesTree {
+             .collect()
+     }
+ 
++    pub(crate) fn insert_reborrow(&mut self, loc: Loc, place: Place, ty: Ty) {
++        self.insert(loc, LocKind::Reborrow(place), ty);
++    }
++
++    pub(crate) fn take_reborrow(&mut self, place: &Place) -> Option<(Loc, Ty)> {
++        let loc = self.map.iter().find_map(|(loc, binding)| {
++            if let LocKind::Reborrow(reborrowed_place) = &binding.kind
++                && reborrowed_place == place
++            {
++                Some(*loc)
++            } else {
++                None
++            }
++        })?;
++        Some((loc, self.remove(&loc).ty))
++    }
++
+     fn remove(&mut self, loc: &Loc) -> Binding {
+         self.map
+             .shift_remove(loc)
+@@ -962,6 +981,7 @@ mod pretty {
+                 LocKind::Local | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+                 LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::Reborrow(place) => write!(f, "[reborrow({place:?})]"),
+             }
+         }
+     }

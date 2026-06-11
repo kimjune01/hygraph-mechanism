@@ -1,0 +1,116 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..0c520ac 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -19,9 +19,9 @@ use flux_middle::{
+     pretty::{PrettyCx, PrettyNested},
+     queries::QueryResult,
+     rty::{
+-        BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FnSig, GenericArg, HoleKind,
+-        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, SortCtor, SubsetTy, Ty,
+-        TyKind, VariantIdx,
++        BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FieldProj, FnSig, GenericArg,
++        HoleKind, INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, Sort, SortCtor,
++        SubsetTy, Ty, TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+         region_matching::{rty_match_regions, ty_match_regions},
+@@ -41,7 +41,6 @@ use rustc_type_ir::BoundVar;
+ use serde::Serialize;
+ 
+ use self::place_ty::{LocKind, PlacesTree};
+-use super::rty::Sort;
+ 
+ #[derive(Clone, Default)]
+ pub struct TypeEnv<'a> {
+@@ -231,6 +230,7 @@ impl<'a> TypeEnv<'a> {
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+         for (loc, bound, ty) in self.bindings.local_ptrs() {
++            let bound = replace_abstract_refinements(&ty, &bound);
+             infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
+             self.bindings.remove_local(&loc);
+         }
+@@ -420,6 +420,82 @@ impl<'a> TypeEnv<'a> {
+     }
+ }
+ 
++fn replace_abstract_refinements(new: &Ty, old: &Ty) -> Ty {
++    match (new.kind(), old.kind()) {
++        (TyKind::Indexed(new_bty, new_idx), TyKind::Indexed(old_bty, old_idx)) => {
++            Ty::indexed(
++                replace_abstract_refinements_bty(new_bty, old_bty),
++                replace_abstract_refinements_idx(new_idx, old_idx, &old_bty.sort()),
++            )
++        }
++        (TyKind::Ptr(_, _), _) | (_, TyKind::Uninit) => old.clone(),
++        _ => old.clone(),
++    }
++}
++
++fn replace_abstract_refinements_bty(new: &BaseTy, old: &BaseTy) -> BaseTy {
++    match (new, old) {
++        (BaseTy::Ref(_, new_ty, _), BaseTy::Ref(old_re, old_ty, old_mutbl)) => {
++            BaseTy::Ref(*old_re, replace_abstract_refinements(new_ty, old_ty), *old_mutbl)
++        }
++        (BaseTy::Tuple(new_tys), BaseTy::Tuple(old_tys)) => {
++            BaseTy::Tuple(
++                iter::zip(new_tys, old_tys)
++                    .map(|(new_ty, old_ty)| replace_abstract_refinements(new_ty, old_ty))
++                    .collect(),
++            )
++        }
++        (BaseTy::Array(new_ty, old_len), BaseTy::Array(old_ty, _)) => {
++            BaseTy::Array(replace_abstract_refinements(new_ty, old_ty), old_len.clone())
++        }
++        (BaseTy::Slice(new_ty), BaseTy::Slice(old_ty)) => {
++            BaseTy::Slice(replace_abstract_refinements(new_ty, old_ty))
++        }
++        _ => old.clone(),
++    }
++}
++
++fn replace_abstract_refinements_idx(new: &Expr, old: &Expr, sort: &Sort) -> Expr {
++    match sort {
++        Sort::Func(_) => new.clone(),
++        Sort::Tuple(sorts) => {
++            Expr::tuple(
++                sorts
++                    .iter()
++                    .enumerate()
++                    .map(|(idx, sort)| {
++                        let proj = FieldProj::Tuple { arity: sorts.len(), field: idx as u32 };
++                        replace_abstract_refinements_idx(
++                            &new.proj_and_reduce(proj),
++                            &old.proj_and_reduce(proj),
++                            sort,
++                        )
++                    })
++                    .collect(),
++            )
++        }
++        Sort::App(SortCtor::Adt(sort_def), args) if sort_def.is_struct() => {
++            let sorts = sort_def.struct_variant().field_sorts(args);
++            Expr::ctor_struct(
++                sort_def.did(),
++                sort_def
++                    .struct_variant()
++                    .projections(sort_def.did())
++                    .zip(sorts.iter())
++                    .map(|(proj, sort)| {
++                        replace_abstract_refinements_idx(
++                            &new.proj_and_reduce(proj),
++                            &old.proj_and_reduce(proj),
++                            sort,
++                        )
++                    })
++                    .collect(),
++            )
++        }
++        _ => old.clone(),
++    }
++}
++
+ pub(crate) enum PtrToRefBound {
+     Ty(Ty),
+     Infer,

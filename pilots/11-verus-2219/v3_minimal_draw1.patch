@@ -1,0 +1,46 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..d8f819c 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,7 +845,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref func, ref mut target, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+@@ -876,7 +877,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     true
+                 };
+ 
+-            if !ty_is_inhabited {
++            if !ty_is_inhabited && !is_verus_erased_ghost_value_call(self.tcx, func) {
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+@@ -898,6 +899,22 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+             }
+         }
+ 
++        fn is_verus_erased_ghost_value_call<'tcx>(
++            tcx: TyCtxt<'tcx>,
++            func: &Operand<'tcx>,
++        ) -> bool {
++            let Operand::Constant(constant) = func else {
++                return false;
++            };
++            let ty::FnDef(def_id, _) = constant.const_.ty().kind() else {
++                return false;
++            };
++            tcx.is_diagnostic_item(
++                Symbol::intern("verus::verus_builtin::erased_ghost_value"),
++                *def_id,
++            )
++        }
++
+         /// Starting at a target unreachable block, find some user code to lint as unreachable
+         fn find_unreachable_code_from(
+             bb: BasicBlock,

@@ -1,0 +1,36 @@
+VERDICT: reported program now correctly REJECTED.
+
+Changed files/functions:
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - `erased_ghost_value`
+  - `erased_ghost_value_with_args`
+  - `erased_ghost_value_kind_with_args`
+  - added `normalize_erased_ghost_value_ty`
+  - added `ghost_placeholder_ty`
+- `source/rustc_mir_build/src/thir/cx/expr.rs`
+  - `ThirBuildCx::make_mirror_unadjusted`, after Verus `mirror_expr_post`
+
+Root cause/fix:
+Verus erases ghost/proof expressions into synthetic `erased_ghost_value<S, T>(...)` THIR calls so rustc borrowchecking still sees relevant operands. When `T = !`, rustc/MIR treated the synthetic erased expression as diverging/unreachable, so code after it was pruned from the lifetime/borrow path and tracked linearity errors were skipped. The fix normalizes only Verus-erased ghost placeholders of type `!` to a non-diverging `()` placeholder in THIR/MIR, while leaving real never-typed control flow unchanged.
+
+Perturbation verdicts:
+- `original.rs`: post-fix REJECTED with `error[E0382]: use of moved value: t`.
+- `non_never_arg.rs`: REJECTED before and after; baseline confirms non-`!` ghost arg is not the bug.
+- `concrete_tracked.rs`: post-fix REJECTED with `E0382`; generic tracked type was incidental.
+- `never_let_then_double.rs`: post-fix REJECTED with `E0382`; bug generalizes beyond proof-call argument shape.
+- `real_return_overreject.rs`: still VERIFIED, `2 verified, 0 errors`, with unreachable-code warning; real unreachable code not over-rejected.
+
+Regression:
+- `cargo run --manifest-path ../tools/vargo/Cargo.toml -- test -p rust_verify_test --test lifetime`
+- Result: `94 passed; 0 failed`.
+- vstd rebuild during test: `1490 verified, 0 errors`.
+
+Hypothesis graph:
+- `/tmp/p11g-scratch/HYPOTHESIS_GRAPH.md`
+
+`git diff --stat`:
+```text
+ source/rustc_mir_build/src/thir/cx/expr.rs       |  1 +
+ source/rustc_mir_build_additional_files/verus.rs | 22 ++++++++++++++++++++++
+ 2 files changed, 23 insertions(+)
+```

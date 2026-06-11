@@ -1,0 +1,7 @@
+draw   arm      T1      T2      T3      verdict
+1      graph    VERIFY  VERIFY  E0999   general+sound
+1      minimal  VERIFY  E0999   E0999   OVER-NARROW(T2)
+2      graph    VERIFY  VERIFY  E0999   general+sound
+2      minimal  VERIFY  VERIFY  E0999   general+sound
+3      graph    VERIFY  VERIFY  E0999   general+sound
+3      minimal  VERIFY  VERIFY  E0999   general+sound

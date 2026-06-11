@@ -1,0 +1,68 @@
+You are diagnosing and fixing a real soundness bug in `verus`, an SMT-based verifier for Rust (it proves Rust programs satisfy their specifications). The bug is in verus's own source code. You work ONLY inside this repository checkout:
+
+    REPO ROOT: /Users/junekim/Documents/verus-p11   (currently at the base commit)
+
+## The bug
+verus-lang/verus issue #2219: "ghost uses of never type invalidates borrowchecking"
+
+Verus WRONGLY ACCEPTS (verifies) this program, which it should REJECT — `t` is a `tracked` (linear/affine) resource and is consumed twice:
+
+```rust
+proof fn test(nvr: !) { }
+proof fn consume<T>(tracked t: T) { }
+uninterp spec fn arbitrary<T>() -> T;
+
+proof fn test2<T>(tracked t: T) {
+    test(arbitrary());
+
+    consume(t);
+    consume(t);
+}
+```
+
+The ghost use of the `!`-typed value causes Rust to treat the code after it as unreachable, so verus's borrow/linearity check for `tracked` resources is silently skipped and the double-consume slips through. A correct verifier must report an error here (e.g. "use of moved value: `t`").
+
+## What counts as DONE (read carefully — a NARROW fix is NOT acceptable)
+Making the verifier reject the reported program is necessary but NOT sufficient. The reported issue is ONE example. A fix keyed to incidental features of how that example happens to be written — so that the reported program is rejected but OTHER programs that are unsound for the same underlying reason are still wrongly accepted — is an OVER-NARROW fix and will be REJECTED. Deliver the MOST GENERAL fix that stays SOUND and does not over-reject:
+- generality: every program unsound for the same root reason is now rejected, not just the reported one;
+- no over-rejection: programs that are genuinely valid still verify.
+Before declaring done, attack your own fix as an adversary would: construct programs that differ from the reported one ONLY in incidental ways and confirm the unsound ones are now rejected, and construct a genuinely-valid variant and confirm it still verifies. Do NOT stop at the first fix that rejects the reported program. Stop only when you cannot construct any unsound program your fix wrongly accepts, nor any valid one it wrongly rejects.
+
+## How to run verus on a single test program
+verus verifies one `.rs` file at a time. From the repo root:
+
+    cd /Users/junekim/Documents/verus-p11/source && env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/tmp/rustup-shims:$PATH ./target-verus/release/verus --crate-type=lib <path-to-file.rs>
+
+Interpreting output:
+- a line like `verification results:: N verified, M errors` with `M > 0`, OR any `error[...]` / "use of moved value" => the program was REJECTED.
+- `N verified, 0 errors` with no error lines => the program VERIFIED (was accepted).
+Proof/spec code goes inside `verus! { ... }`; a file needs `fn main() {}`. Files using `!` need `#![allow(internal_features)] #![feature(never_type)]` at the top. The toolchain is already built; after you EDIT verus source the next run recompiles incrementally.
+
+## Where the verifier lives
+verus's own source is under `source/` — especially `source/rust_verify/src/` (mode/erasure and VIR generation: `erase.rs`, `rust_to_vir_expr.rs`, `fn_call_to_vir.rs`) and the vendored MIR-builder fork under `source/rustc_mir_build/` and `source/rustc_mir_build_additional_files/` (where Rust's control-flow graph is constructed and unreachable code is pruned). The bug's thread: the ghost `!`-typed expression makes Rust delete the control-flow edge after it, so the verifier never checks the following statements.
+
+## Hard boundaries (you are a contributor; the fix is NOT in the repo)
+- MODIFY only non-test Rust source under `source/` (NOT under any `*_test` crate or `tests/` dir).
+- Do NOT consult git history, git log, branches, stashes, reflog, tags, or any remote for "the fix" — it is not reachable and looking for it is cheating.
+- Do NOT read any directory outside /Users/junekim/Documents/verus-p11 (except writing scratch files under /tmp/p11g-scratch). Do NOT browse the web.
+- Write your own scratch reproducer `.rs` files in /tmp/p11g-scratch, never in a test crate.
+
+## Your approach: run a hypothesis graph (do not jump to a fix)
+Diagnose by perturbation, and let the diagnosis drive the fix. Maintain a hypothesis-graph document at /tmp/p11g-scratch/HYPOTHESIS_GRAPH.md. Work in cycles:
+
+1. **Observation (H0).** Reproduce the reported unsoundness. Record exactly what verus does (it accepts; trace where the linearity/borrow obligation that SHOULD fire is dropped).
+2. **Differential narrowing.** Propose competing hypotheses for the root cause and design *decisive, cheap, reversible* perturbations — minimal variant programs that change ONE feature of the reported example at a time — then classify each result's trajectory (convergent / divergent / oscillatory / chaotic). A bug report shows ONE concrete example; many of its surface features are INCIDENTAL to the actual defect rather than essential. For each surface feature of the reported program — the particular type written in the diverging ghost expression, how that value is produced and reached, the shape of the proof code, the kind of resource being consumed — explicitly ask "is this feature load-bearing for the bug, or just an incidental detail of how the reporter happened to write it?" and build a perturbation that holds everything else fixed while changing that one feature. Each kill condition (a perturbation that does NOT reproduce) and each survival (one that still does) narrows the essential core. Follow those edges until you have characterized the GENERAL condition under which the bug fires, not the specific reported shape.
+3. **Root cause.** Trace into the verifier/MIR-builder and localize exactly WHERE and WHY the post-statement code is treated as unreachable for ghost/spec code. Label each node's reasoning mode — abduction (proposed), deduction (traced from code), induction (ran and measured) — and keep confidence tied to mode.
+4. **Fix at the root.** Implement the minimal change that addresses the *general root cause you characterized*, not the surface symptom of the single reported example. Re-run every perturbation your narrowing showed is the SAME bug and confirm each is now correctly REJECTED.
+5. **Over-rejection probe.** Construct a LEGITIMATE variant that SHOULD still verify — e.g. code that genuinely follows a truly-diverging call, which a correct verifier must still accept — and confirm your fix does NOT wrongly reject it. A fix that rejects valid programs is over-conservative; if that happens, refine and re-enter the graph. The invalid variants must be rejected AND the legitimate variants must still verify.
+6. **Regression.** Run the lifetime/borrow test suite (`vargo test -p rust_verify_test --test lifetime`); nothing previously green may go red.
+
+Write each node (hypothesis, perturbation, observed output, trajectory shape, kill-or-confirm verdict, edge to next) to the graph document as you go. Keep going until: the root cause is confirmed, the reported program is rejected, your generalization-probe variants are rejected, the over-rejection probe still verifies, and the suite is green.
+
+## When done, return a report containing:
+- VERDICT: is the reported program now correctly REJECTED? (and the results of your generalization probes + over-rejection probe + regression suite)
+- The source file(s) and function(s) you changed.
+- A one-paragraph root-cause diagnosis and description of your fix.
+- A list of the perturbation variants you ran and each one's verdict.
+- The output of `git -C /Users/junekim/Documents/verus-p11 diff --stat`.
+Your final message is a report for an orchestrator, not a user — return the data, not prose.

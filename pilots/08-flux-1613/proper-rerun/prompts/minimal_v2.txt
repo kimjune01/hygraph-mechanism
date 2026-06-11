@@ -1,0 +1,82 @@
+You are fixing a real bug in `flux`, a refinement type checker for Rust (it verifies Rust programs against refinement-type annotations using an SMT backend). The bug is in the checker's own source code. You work ONLY inside this repository checkout, which is your current working directory:
+
+    REPO ROOT: /Users/junekim/Documents/flux
+
+## The bug to fix
+flux-rs/flux issue #1613: "error when mutating a composite-sort abstract refinement field via setter"
+
+When implementing a setter that updates an abstract refinement on a composite-sort, Flux unexpectedly returns an error. This program SHOULD verify but currently does not:
+
+```rust
+#[flux_rs::opaque]
+#[flux_rs::refined_by(len: int, hdl get: int -> bool)]
+struct Slot([bool]);
+
+impl Slot {
+    #[flux_rs::trusted]
+    #[flux_rs::sig(fn(self: &strg Slot[@n, @f], i: usize{i < n}) ensures self: Slot[n, |j| j == i || f(j)])]
+    fn set(&mut self, i: usize) { self.0[i] = true; }
+}
+
+#[flux_rs::refined_by(slot: Slot)]
+struct Container<'a> {
+    #[flux_rs::field({&mut Slot[slot] | slot.len > 0})]
+    slot: &'a mut Slot,
+}
+
+impl<'a> Container<'a> {
+    #[flux_rs::sig(fn(self: &strg Container[@s]) ensures self: Container)]
+    fn update(&mut self) {
+        self.slot.set(0); // error[E0999]: type invariant may not hold (when place is folded)
+    }
+}
+```
+
+Expected: after `set(0)`, `self.slot` has sort `Slot[s.slot.len, |j| j == 0 || f(j)]` where `f` was captured from the pre-call sort. Re-folding Container only requires `slot.len > 0` = `s.slot.len > 0`, provable from the original field invariant.
+
+## What counts as DONE (read carefully — a NARROW fix is NOT acceptable)
+Making the reported program verify is necessary but NOT sufficient. The reported issue is ONE example. A fix keyed to incidental features of how that example happens to be written — so that the reported program verifies but OTHER programs that should verify for the same underlying reason still do not — is an OVER-NARROW fix and will be REJECTED. Deliver the MOST GENERAL fix that stays SOUND:
+- generality: every program that SHOULD verify for the same root reason now verifies, not just the reported one;
+- soundness: no program that should be rejected is allowed to verify.
+Before declaring done, attack your own fix as an adversary would: construct programs that differ from the reported one ONLY in incidental ways and confirm they verify, and construct an invalid variant and confirm it is still rejected. Do NOT stop at the first fix that makes the reported program verify. Stop only when you cannot construct any valid program your fix wrongly rejects, nor any invalid one it wrongly accepts.
+
+## How to run flux on a single test program
+flux verifies one `.rs` file at a time. From the repo root:
+
+    cd /Users/junekim/Documents/flux && env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/tmp/rustup-shims:$PATH cargo xtask run <path-to-file.rs>
+
+Interpreting output:
+- `error[E0999]: type invariant may not hold` (or any `error[...]`) => the program FAILED verification.
+- a `summary. N functions processed ...` line with NO `error` lines above it => the program VERIFIED.
+The toolchain is already built, so the first run is fast; after you EDIT checker source the next run recompiles incrementally (~30-90s). Both `flux_rs::` and `flux::` attribute syntax work in test programs.
+
+## Where the checker lives
+The refinement checker is in `crates/flux-refineck/src/` — especially `type_env.rs`, `checker.rs`, and `type_env/place_ty.rs`. Supporting refinement types are in `crates/flux-middle/`. Read the code to understand how `&mut` field reborrows and place folding/unfolding work; the error message "type invariant may not hold (when place is folded)" is your starting thread.
+
+## Regression check
+Before declaring done, confirm you did not break existing tests:
+
+    env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/tmp/rustup-shims:$PATH cargo xtask test --suite basic --filter abstract
+
+(omit --filter for the full basic suite; it is slow). All previously-passing tests must still pass.
+
+## Hard boundaries (you are a contributor; the fix is NOT in the repo)
+- MODIFY only non-test Rust source under `crates/`. Do NOT modify anything under `tests/`.
+- Do NOT consult git history, git log, branches, stashes, reflog, tags, or any remote for "the fix" — it is not reachable and looking for it is cheating.
+- Do NOT read any directory outside /Users/junekim/Documents/flux (except writing scratch files under /tmp/p08m-scratch). Do NOT browse the web.
+- Write your own scratch reproducer `.rs` files in /tmp/p08m-scratch, never in the repo's `tests/` dir.
+
+## Your approach
+You are a software engineer fixing the bug. Workflow:
+1. Analyze the codebase: find and read the relevant checker files.
+2. Reproduce the issue with the program from the bug report (save it under /tmp/p08m-scratch).
+3. Edit the source to fix it, in a way that is general and consistent with the codebase.
+4. Verify your fix makes the reported program verify.
+5. Test edge cases to ensure your fix is robust and general, and run the regression suite.
+Make a real, general fix consistent with the codebase — not a hack targeted at the one example. Be persistent across recompiles. Stop as soon as the reported program verifies AND the regression suite is green (or you have exhausted reasonable effort).
+
+## When done, report:
+- VERDICT: did the reported program verify? (and regression suite status)
+- The source file(s) and function(s) you changed.
+- A one-paragraph description of your fix.
+- The output of `git diff --stat`.

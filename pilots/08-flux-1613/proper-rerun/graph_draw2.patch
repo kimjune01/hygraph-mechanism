@@ -1,0 +1,63 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..3b8826a 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -141,10 +141,19 @@ impl<'a> TypeEnv<'a> {
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+         if result.is_strg && mutbl == Mutability::Mut {
+             Ok(Ty::ptr(PtrKind::Mut(re), result.path()))
++        } else if mutbl == Mutability::Mut && is_opaque_adt(&result.ty) {
++            let t1 = result.ty.clone();
++            let t2 = t1.with_holes().replace_holes(|sorts, kind| {
++                debug_assert_eq!(kind, HoleKind::Pred);
++                infcx.fresh_kvar(sorts, KVarEncoding::Conj)
++            });
++            infcx.subtyping(&t1, &t2, ConstrReason::Other)?;
++            result.block_with(t2.clone());
++            Ok(Ty::mk_ref(re, t2, mutbl))
+         } else {
+-            // FIXME(nilehmann) we should block the place here. That would require a notion
+-            // of shared vs mutable block types because sometimes blocked places from a shared
+-            // reference never get unblocked and we should still allow reads through them.
++            // FIXME(nilehmann) shared references should use a shared block type. Mutable blocks
++            // are always paired with an `Unblock`, but shared borrows can stay live after the
++            // borrowed place is folded back into an aggregate.
+             Ok(Ty::mk_ref(re, result.ty, mutbl))
+         }
+     }
+@@ -426,6 +435,10 @@ pub(crate) enum PtrToRefBound {
+     Identity,
+ }
+ 
++fn is_opaque_adt(ty: &Ty) -> bool {
++    matches!(ty.as_bty_skipping_existentials(), Some(BaseTy::Adt(adt, args)) if adt.is_opaque() && args.is_empty())
++}
++
+ impl flux_infer::infer::LocEnv for TypeEnv<'_> {
+     fn ptr_to_ref(
+         &mut self,
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..189dc5a 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -134,11 +134,15 @@ impl PlacesTree {
+         while let Some(elem) = cursor.next() {
+             match elem {
+                 PlaceElem::Deref => {
+-                    if let TyKind::Ptr(_, path) = ty.kind() {
+-                        cursor.change_root(path);
+-                        ty = self.get_loc(&cursor.loc).ty.clone();
+-                    } else {
+-                        return;
++                    match ty.kind() {
++                        TyKind::Ptr(_, path) => {
++                            cursor.change_root(path);
++                            ty = self.get_loc(&cursor.loc).ty.clone();
++                        }
++                        Ref!(_, deref_ty, _) => {
++                            ty = deref_ty.clone();
++                        }
++                        _ => return,
+                     }
+                 }
+                 PlaceElem::Field(f) => {

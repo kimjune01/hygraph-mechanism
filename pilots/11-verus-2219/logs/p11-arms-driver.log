@@ -1,0 +1,14 @@
+DRIVER START Thu 11 Jun 2026 07:24:26 PDT
+[driver 07:24] === verus graph draw 1 ===
+[driver 07:36] verus graph draw 1 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2)
+[driver 07:36] === verus minimal draw 1 ===
+[driver 07:42] verus minimal draw 1 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2)
+DRIVER DONE Thu 11 Jun 2026 07:42:21 PDT
+DRIVER2 START Thu 11 Jun 2026 07:44:22 PDT
+[driver 07:44] === verus graph draw 2 ===
+[driver 07:48] verus graph draw 2 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2)
+[driver 07:48] === verus graph draw 3 ===
+[driver 07:55] verus graph draw 3 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2)
+[driver 07:55] === verus minimal draw 2 ===
+[driver 08:16] verus minimal draw 2 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2)
+DRIVER DONE Thu 11 Jun 2026 08:16:13 PDT

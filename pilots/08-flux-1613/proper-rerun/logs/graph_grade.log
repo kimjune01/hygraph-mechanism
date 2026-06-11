@@ -1,0 +1,6 @@
+START 06:48
+grading worktree: /Users/junekim/Documents/flux
+  t1_issue1613       -> VERIFY
+  t2_receipt_int     -> VERIFY
+  t3_unsound_twin    -> E0999
+GRADE_DONE 06:48

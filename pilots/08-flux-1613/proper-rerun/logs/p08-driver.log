@@ -1,0 +1,14 @@
+DRIVER START Thu 11 Jun 2026 07:08:28 PDT
+[driver 07:08] === graph draw 2 (branch p08g2) ===
+[driver 07:23] graph draw 2 -> VERIFY/VERIFY/E0999 = general+sound
+[driver 07:23] === minimal draw 2 (branch p08m2) ===
+[driver 07:33] minimal draw 2 -> VERIFY/E0999/E0999 = OVER-NARROW(T2fail)
+[driver 07:33] === graph draw 3 (branch p08g3) ===
+[driver 07:38] graph draw 3 -> VERIFY/VERIFY/E0999 = general+sound
+[driver 07:38] === minimal draw 3 (branch p08m3) ===
+[driver 07:49] minimal draw 3 -> VERIFY/VERIFY/E0999 = general+sound
+[driver 07:49] === graph draw 4 (branch p08g4) ===
+[driver 08:00] graph draw 4 -> VERIFY/VERIFY/E0999 = general+sound
+[driver 08:00] === minimal draw 4 (branch p08m4) ===
+[driver 08:12] minimal draw 4 -> VERIFY/VERIFY/E0999 = general+sound
+DRIVER DONE Thu 11 Jun 2026 08:12:03 PDT

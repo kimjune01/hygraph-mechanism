@@ -1,0 +1,165 @@
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79df..6fcf2d3 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -291,7 +291,7 @@ fn check_fn_subtyping(
+         .collect_vec();
+ 
+     let mut env = TypeEnv::empty();
+-    let actuals = unfold_local_ptrs(&mut infcx, &mut env, sub_sig.as_ref(), &actuals)?;
++    let actuals = unfold_local_ptrs(&mut infcx, &mut env, sub_sig.as_ref(), &actuals, span)?;
+     let actuals = infer_under_mut_ref_hack(&mut infcx, &actuals[..], sub_sig.as_ref());
+ 
+     let output = infcx.ensure_resolved_evars(|infcx| {
+@@ -437,6 +437,7 @@ fn unfold_local_ptrs(
+     env: &mut TypeEnv,
+     fn_sig: &PolyFnSig,
+     actuals: &[Ty],
++    span: Span,
+ ) -> InferResult<Vec<Ty>> {
+     // We *only* need to know whether each input is a &strg or not
+     let fn_sig = fn_sig.skip_binder_ref();
+@@ -447,7 +448,7 @@ fn unfold_local_ptrs(
+             TyKind::StrgRef(_, _, _),
+         ) = (actual.kind(), input.kind())
+         {
+-            let loc = env.unfold_local_ptr(infcx, bound)?;
++            let loc = env.unfold_local_ptr(&mut infcx.at(span), bound)?;
+             let path1 = Path::new(loc, rty::List::empty());
+             Ty::ptr(PtrKind::Mut(*re), path1)
+         } else {
+@@ -897,7 +898,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+         let tcx = genv.tcx();
+ 
+         let actuals =
+-            unfold_local_ptrs(infcx, env, fn_sig.skip_binder_ref(), actuals).with_span(span)?;
++            unfold_local_ptrs(infcx, env, fn_sig.skip_binder_ref(), actuals, span).with_span(span)?;
+         let actuals = infer_under_mut_ref_hack(infcx, &actuals, fn_sig.skip_binder_ref());
+         infcx.push_evar_scope();
+ 
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..6a50b71 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -20,8 +20,8 @@ use flux_middle::{
+     queries::QueryResult,
+     rty::{
+         BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FnSig, GenericArg, HoleKind,
+-        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, SortCtor, SubsetTy, Ty,
+-        TyKind, VariantIdx,
++        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Ref, Region, SortCtor, SubsetTy,
++        Ty, TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+         region_matching::{rty_match_regions, ty_match_regions},
+@@ -141,6 +141,20 @@ impl<'a> TypeEnv<'a> {
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+         if result.is_strg && mutbl == Mutability::Mut {
+             Ok(Ty::ptr(PtrKind::Mut(re), result.path()))
++        } else if mutbl == Mutability::Mut
++            && matches!(place.projection.last(), Some(PlaceElem::Deref))
++        {
++            let path = result.path();
++            let ty = result.ty.clone();
++            if !path.projection().is_empty()
++                && !matches!(ty.kind(), TyKind::Blocked(_))
++                && matches!(self.bindings.get(&path).kind(), Ref!(_, _, Mutability::Mut))
++            {
++                let loc = self.unfold_linked_local_ptr(infcx, path, &ty)?;
++                Ok(Ty::ptr(PtrKind::Mut(re), Path::from(loc)))
++            } else {
++                Ok(Ty::mk_ref(re, ty, mutbl))
++            }
+         } else {
+             // FIXME(nilehmann) we should block the place here. That would require a notion
+             // of shared vs mutable block types because sometimes blocked places from a shared
+@@ -230,8 +244,18 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+-        for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++        for (loc, bound, origin, ty) in self.bindings.local_ptrs() {
++            if let Some(origin) = origin {
++                let ref_ty = self.bindings.get(&origin);
++                let Ref!(re, _, mutbl) = ref_ty.kind() else {
++                    tracked_span_bug!("linked local pointer to non-reference path");
++                };
++                self.bindings
++                    .lookup(&origin, infcx.span)
++                    .update(Ty::mk_ref(*re, ty, *mutbl));
++            } else {
++                infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            }
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+@@ -321,15 +345,29 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub(crate) fn unfold_local_ptr(
++        &mut self,
++        infcx: &mut InferCtxtAt,
++        bound: &Ty,
++    ) -> InferResult<Loc> {
++        let name = infcx.define_unknown_var(&Sort::Loc);
++        let loc = Loc::from(name);
++        let ty = infcx.unpack(bound);
++        self.bindings
++            .insert(loc, LocKind::LocalPtr(bound.clone(), None), ty);
++        Ok(loc)
++    }
++
++    fn unfold_linked_local_ptr(
+         &mut self,
+         infcx: &mut InferCtxt,
++        origin: Path,
+         bound: &Ty,
+     ) -> InferResult<Loc> {
+         let name = infcx.define_unknown_var(&Sort::Loc);
+         let loc = Loc::from(name);
+         let ty = infcx.unpack(bound);
+         self.bindings
+-            .insert(loc, LocKind::LocalPtr(bound.clone()), ty);
++            .insert(loc, LocKind::LocalPtr(bound.clone(), Some(origin)), ty);
+         Ok(loc)
+     }
+ 
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..fc937ff 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -35,7 +35,7 @@ pub(crate) enum LocKind {
+     Local,
+     Box(GenericArg),
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+-    LocalPtr(Ty),
++    LocalPtr(Ty, Option<Path>),
+     Universal,
+ }
+ 
+@@ -292,12 +292,12 @@ impl PlacesTree {
+         self.map.shift_remove(loc);
+     }
+ 
+-    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Ty)> {
++    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Option<Path>, Ty)> {
+         self.map
+             .iter()
+             .filter_map(|(loc, binding)| {
+-                if let LocKind::LocalPtr(bound) = &binding.kind {
+-                    Some((*loc, bound.clone(), binding.ty.clone()))
++                if let LocKind::LocalPtr(bound, origin) = &binding.kind {
++                    Some((*loc, bound.clone(), origin.clone(), binding.ty.clone()))
+                 } else {
+                     None
+                 }
+@@ -961,7 +961,7 @@ mod pretty {
+             match self {
+                 LocKind::Local | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+-                LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::LocalPtr(ty, _) => w!(cx, f, "[local-ptr({:?})]", ty),
+             }
+         }
+     }

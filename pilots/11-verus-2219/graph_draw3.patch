@@ -1,0 +1,57 @@
+diff --git a/source/rust_verify/src/fn_call_to_vir.rs b/source/rust_verify/src/fn_call_to_vir.rs
+index 6eab2f8..f5fd415 100644
+--- a/source/rust_verify/src/fn_call_to_vir.rs
++++ b/source/rust_verify/src/fn_call_to_vir.rs
+@@ -45,6 +45,26 @@ use vir::ast_util::{
+ };
+ use vir::def::field_ident_from_rust;
+ 
++fn call_erases_to_ghost_value(mode: Mode, in_ghost: bool) -> bool {
++    mode == Mode::Spec || (in_ghost && mode == Mode::Exec)
++}
++
++fn check_erased_never_call<'tcx>(
++    bctx: &BodyCtxt<'tcx>,
++    expr: &Expr<'tcx>,
++    mode: Mode,
++) -> Result<(), VirErr> {
++    if call_erases_to_ghost_value(mode, bctx.in_ghost)
++        && matches!(bctx.types.expr_ty_adjusted(expr).kind(), TyKind::Never)
++    {
++        return err_span(
++            expr.span,
++            "ghost expression of type `!` is not supported in this position",
++        );
++    }
++    Ok(())
++}
++
+ pub(crate) fn fn_call_to_vir<'tcx>(
+     bctx: &BodyCtxt<'tcx>,
+     expr: &Expr<'tcx>,
+@@ -305,6 +325,8 @@ fn fn_call_or_assoc_const_to_vir<'tcx>(
+         }
+     };
+ 
++    let mode = crate::attributes::get_mode(Mode::Exec, bctx.ctxt.tcx.get_all_attrs(f));
++    check_erased_never_call(bctx, expr, mode)?;
+     record_call(bctx, expr, ResolvedCall::Call(name.clone(), record_name, bctx.in_ghost));
+ 
+     let vir_args =
+diff --git a/source/rust_verify/src/rust_to_vir_expr.rs b/source/rust_verify/src/rust_to_vir_expr.rs
+index 819bbb0..511c992 100644
+--- a/source/rust_verify/src/rust_to_vir_expr.rs
++++ b/source/rust_verify/src/rust_to_vir_expr.rs
+@@ -2049,6 +2049,12 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
+                     };
+ 
+                     let (target, vir_args, resolved_call) = if is_spec_fn {
++                        if matches!(bctx.types.expr_ty_adjusted(expr).kind(), TyKind::Never) {
++                            return err_span(
++                                expr.span,
++                                "ghost expression of type `!` is not supported in this position",
++                            );
++                        }
+                         (CallTarget::FnSpec(vir_fun), vir_args, ResolvedCall::SpecPure)
+                     } else {
+                         if bctx.ctxt.no_vstd {

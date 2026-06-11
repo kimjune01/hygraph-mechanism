@@ -1,0 +1,34 @@
+VERDICT: reported program now correctly REJECTED.
+
+Changed files/functions:
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - added `is_erased_ghost_value`
+
+Root cause/fix:
+Verus erases ghost/spec expressions into fake calls to `erased_ghost_value::<S, T>(...)`, preserving the original erased type `T`. When `T` is `!` or otherwise visibly uninhabited, `lint_and_remove_uninhabited` treated that fake erasure call like a real diverging call and removed its normal return edge. That made following statements unreachable to MIR borrow checking, so tracked double-consumes were skipped. The fix recognizes Verus’s erasure builtin by `DefId` and preserves its return edge even for uninhabited fake return types. Real diverging calls are unchanged.
+
+Perturbation results:
+- `reported.rs`: REJECTED, `error[E0382]: use of moved value: t`
+- `direct_never.rs`: REJECTED, `error[E0382]: use of moved value: t`
+- `concrete_token.rs`: REJECTED, `error[E0382]: use of moved value: t`
+- `nested_block.rs`: REJECTED, `error[E0382]: use of moved value: t`
+- `ghost_never_valid_single_consume.rs`: ACCEPTED, `verification results:: 3 verified, 0 errors`
+- `real_diverge_valid.rs`: ACCEPTED, `verification results:: 4 verified, 0 errors` with Rust unreachable-code warning
+- `no_never_baseline.rs`: REJECTED before fix, confirming ordinary double-consume checking works
+- `external_empty_enum.rs`: discarded; Verus rejects external type use before reaching this condition
+
+Regression:
+- `vargo test -p rust_verify_test --test lifetime`
+- Result: PASS, `94 passed; 0 failed`
+
+Hypothesis graph:
+- Written/updated at `/tmp/p11g-scratch/HYPOTHESIS_GRAPH.md`
+
+`git diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs        | 13 +++++++++++--
+ source/rustc_mir_build_additional_files/verus.rs |  8 ++++++++
+ 2 files changed, 19 insertions(+), 2 deletions(-)
+```

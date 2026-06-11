@@ -1,0 +1,20 @@
+P11V3 DRIVER START Thu 11 Jun 2026 09:55:48 PDT vargo=/Users/junekim/Documents/verus-p11/tools/vargo/target/release/vargo
+[p11v3 09:55] graph draw 1 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11v3 10:10] graph draw 1 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch      100 lines)
+[p11v3 10:10] minimal draw 1 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11v3 10:17] minimal draw 1 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch       46 lines)
+[p11v3 10:17] graph draw 2 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11v3 10:26] graph draw 2 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch       60 lines)
+[p11v3 10:26] minimal draw 2 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11v3 10:41] minimal draw 2 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch      152 lines)
+[p11v3 10:41] graph draw 3 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11v3 10:49] graph draw 3 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch       54 lines)
+[p11v3 10:49] minimal draw 3 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11v3 10:58] minimal draw 3 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch      125 lines)
+P11V3 DRIVER DONE Thu 11 Jun 2026 10:59:02 PDT

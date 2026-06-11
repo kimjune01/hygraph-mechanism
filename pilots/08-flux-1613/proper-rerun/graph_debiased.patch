@@ -1,0 +1,104 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..ff3ce22 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -231,7 +231,9 @@ impl<'a> TypeEnv<'a> {
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+         for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            let packed_bound = place_ty::pack_local_ptr_bound(&bound);
++            infcx.subtyping(&ty, &packed_bound, ConstrReason::FoldLocal)?;
++            self.bindings.replace_mut_ref_bound(&bound, ty);
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..28f5bdb 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -11,7 +11,10 @@ use flux_middle::{
+     rty::{
+         AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt, List,
+         Loc, Mutability, Path, PtrKind, Ref, Sort, Ty, TyKind, VariantIdx, VariantSig,
+-        fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
++        fold::{
++            FallibleTypeFolder, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitable,
++            TypeVisitor,
++        },
+     },
+ };
+ use flux_rustc_bridge::mir::{FieldIdx, Place, PlaceElem};
+@@ -305,6 +308,10 @@ impl PlacesTree {
+             .collect()
+     }
+ 
++    pub(crate) fn replace_mut_ref_bound(&mut self, old_bound: &Ty, new_bound: Ty) {
++        self.fmap_mut(|_, ty| ReplaceMutRefBound { old_bound, new_bound: &new_bound }.fold_ty(ty));
++    }
++
+     fn remove(&mut self, loc: &Loc) -> Binding {
+         self.map
+             .shift_remove(loc)
+@@ -929,6 +936,61 @@ fn fold(
+     }
+ }
+ 
++pub(super) fn pack_local_ptr_bound(ty: &Ty) -> Ty {
++    PackLocalPtrBound.fold_ty(ty)
++}
++
++struct PackLocalPtrBound;
++
++impl TypeFolder for PackLocalPtrBound {
++    fn fold_ty(&mut self, ty: &Ty) -> Ty {
++        match ty.kind() {
++            TyKind::Constr(pred, ty) => {
++                if let TyKind::Indexed(bty, idx) = ty.kind() {
++                    let bty = self.fold_bty(bty);
++                    let pred = ReplaceExpr { from: idx, to: &Expr::nu() }.fold_expr(pred);
++                    Ty::exists_with_constr(bty, pred)
++                } else {
++                    Ty::constr(self.fold_expr(pred), self.fold_ty(ty))
++                }
++            }
++            TyKind::Indexed(bty, _) => {
++                let bty = self.fold_bty(bty);
++                Ty::exists_with_constr(bty, Expr::tt())
++            }
++            _ => ty.super_fold_with(self),
++        }
++    }
++}
++
++struct ReplaceExpr<'a> {
++    from: &'a Expr,
++    to: &'a Expr,
++}
++
++impl TypeFolder for ReplaceExpr<'_> {
++    fn fold_expr(&mut self, expr: &Expr) -> Expr {
++        if expr == self.from { self.to.clone() } else { expr.super_fold_with(self) }
++    }
++}
++
++struct ReplaceMutRefBound<'a> {
++    old_bound: &'a Ty,
++    new_bound: &'a Ty,
++}
++
++impl TypeFolder for ReplaceMutRefBound<'_> {
++    fn fold_ty(&mut self, ty: &Ty) -> Ty {
++        if let TyKind::Indexed(BaseTy::Ref(re, bound, Mutability::Mut), _) = ty.kind()
++            && bound == self.old_bound
++        {
++            Ty::mk_ref(*re, self.new_bound.clone(), Mutability::Mut)
++        } else {
++            ty.super_fold_with(self)
++        }
++    }
++}
++
+ mod pretty {
+ 
+     use flux_middle::pretty::*;

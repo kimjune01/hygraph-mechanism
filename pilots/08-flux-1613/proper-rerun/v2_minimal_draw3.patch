@@ -1,0 +1,85 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..6d7e85a 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -141,6 +141,21 @@ impl<'a> TypeEnv<'a> {
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+         if result.is_strg && mutbl == Mutability::Mut {
+             Ok(Ty::ptr(PtrKind::Mut(re), result.path()))
++        } else if mutbl == Mutability::Mut
++            && place
++                .projection
++                .iter()
++                .any(|elem| matches!(elem, PlaceElem::Field(_)))
++            && !place.behind_raw_ptr(infcx.genv, self.local_decls)?
++        {
++            let ty = result.ty.clone();
++            let bound = ty.with_holes().replace_holes(|sorts, kind| {
++                debug_assert_eq!(kind, HoleKind::Pred);
++                infcx.fresh_kvar(sorts, KVarEncoding::Conj)
++            });
++            infcx.subtyping(&ty, &bound, ConstrReason::Other)?;
++            result.block_with(bound.clone());
++            Ok(Ty::mk_ref(re, bound, Mutability::Mut))
+         } else {
+             // FIXME(nilehmann) we should block the place here. That would require a notion
+             // of shared vs mutable block types because sometimes blocked places from a shared
+@@ -232,6 +247,7 @@ impl<'a> TypeEnv<'a> {
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+         for (loc, bound, ty) in self.bindings.local_ptrs() {
+             infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            self.bindings.replace_blocked(&bound, &ty);
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..dc06a1c 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -11,7 +11,10 @@ use flux_middle::{
+     rty::{
+         AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt, List,
+         Loc, Mutability, Path, PtrKind, Ref, Sort, Ty, TyKind, VariantIdx, VariantSig,
+-        fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
++        fold::{
++            FallibleTypeFolder, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitable,
++            TypeVisitor,
++        },
+     },
+ };
+ use flux_rustc_bridge::mir::{FieldIdx, Place, PlaceElem};
+@@ -137,6 +140,8 @@ impl PlacesTree {
+                     if let TyKind::Ptr(_, path) = ty.kind() {
+                         cursor.change_root(path);
+                         ty = self.get_loc(&cursor.loc).ty.clone();
++                    } else if let Ref!(_, deref_ty, _) = ty.kind() {
++                        ty = deref_ty.clone();
+                     } else {
+                         return;
+                     }
+@@ -271,6 +276,25 @@ impl PlacesTree {
+         self.try_fmap_mut::<!>(|loc, ty| Ok(f(loc, ty))).into_ok();
+     }
+ 
++    pub(crate) fn replace_blocked(&mut self, old: &Ty, new: &Ty) {
++        struct Replacer<'a> {
++            old: &'a Ty,
++            new: &'a Ty,
++        }
++
++        impl TypeFolder for Replacer<'_> {
++            fn fold_ty(&mut self, ty: &Ty) -> Ty {
++                if let TyKind::Blocked(blocked) = ty.kind() {
++                    if blocked == self.old { Ty::blocked(self.new.clone()) } else { ty.clone() }
++                } else {
++                    ty.super_fold_with(self)
++                }
++            }
++        }
++
++        self.fmap_mut(|_, ty| ty.fold_with(&mut Replacer { old, new }));
++    }
++
+     fn try_fmap_mut<E>(&mut self, mut f: impl FnMut(&Loc, &Ty) -> Result<Ty, E>) -> Result<(), E> {
+         self.map.iter_mut().try_for_each(|(loc, binding)| {
+             binding.ty = f(loc, &binding.ty)?;

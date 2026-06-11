@@ -1,0 +1,355 @@
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79df..542f365 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -291,7 +291,9 @@ fn check_fn_subtyping(
+         .collect_vec();
+ 
+     let mut env = TypeEnv::empty();
+-    let actuals = unfold_local_ptrs(&mut infcx, &mut env, sub_sig.as_ref(), &actuals)?;
++    let actual_places = vec![None; actuals.len()];
++    let actuals =
++        unfold_local_ptrs(&mut infcx, &mut env, sub_sig.as_ref(), &actuals, &actual_places)?;
+     let actuals = infer_under_mut_ref_hack(&mut infcx, &actuals[..], sub_sig.as_ref());
+ 
+     let output = infcx.ensure_resolved_evars(|infcx| {
+@@ -437,17 +439,22 @@ fn unfold_local_ptrs(
+     env: &mut TypeEnv,
+     fn_sig: &PolyFnSig,
+     actuals: &[Ty],
++    actual_places: &[Option<Place>],
+ ) -> InferResult<Vec<Ty>> {
+     // We *only* need to know whether each input is a &strg or not
+     let fn_sig = fn_sig.skip_binder_ref();
+     let mut tys = vec![];
+-    for (actual, input) in izip!(actuals, fn_sig.inputs()) {
++    for (actual, input, actual_place) in izip!(actuals, fn_sig.inputs(), actual_places) {
+         let actual = if let (
+             TyKind::Indexed(BaseTy::Ref(re, bound, Mutability::Mut), _),
+             TyKind::StrgRef(_, _, _),
+         ) = (actual.kind(), input.kind())
+         {
+-            let loc = env.unfold_local_ptr(infcx, bound)?;
++            let source = actual_place.clone().map(|place| {
++                let target = env.ref_origin(&place);
++                (place, *re, target)
++            });
++            let loc = env.unfold_local_ptr(infcx, bound, source)?;
+             let path1 = Path::new(loc, rty::List::empty());
+             Ty::ptr(PtrKind::Mut(*re), path1)
+         } else {
+@@ -697,8 +704,35 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+         match &stmt.kind {
+             StatementKind::Assign(place, rvalue) => {
+                 let ty = self.check_rvalue(infcx, env, stmt_span, rvalue)?;
++                let ref_origin_src = if matches!(
++                    ty.kind(),
++                    TyKind::Indexed(BaseTy::Ref(_, _, Mutability::Mut), _)
++                ) {
++                    match rvalue {
++                        Rvalue::Use(Operand::Copy(src) | Operand::Move(src)) => Some(src.clone()),
++                        _ => None,
++                    }
++                } else {
++                    None
++                };
++                let ref_origin_pointee = if matches!(
++                    ty.kind(),
++                    TyKind::Indexed(BaseTy::Ref(_, _, Mutability::Mut), _)
++                ) {
++                    match rvalue {
++                        Rvalue::Ref(_, BorrowKind::Mut { .. }, pointee) => Some(pointee.clone()),
++                        _ => None,
++                    }
++                } else {
++                    None
++                };
+                 self.check_assign_ty(infcx, env, place, ty, stmt_span)
+                     .with_span(stmt_span)?;
++                if let Some(src) = ref_origin_src {
++                    env.set_ref_origin_from_place(place, &src);
++                } else if let Some(pointee) = ref_origin_pointee {
++                    env.set_ref_origin_from_borrow(place, &pointee);
++                }
+             }
+             StatementKind::SetDiscriminant { .. } => {
+                 // TODO(nilehmann) double check here that the place is unfolded to
+@@ -781,6 +815,15 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                 let actuals = self
+                     .check_operands(infcx, env, terminator_span, args)
+                     .with_span(terminator_span)?;
++                let actual_places = args
++                    .iter()
++                    .map(|arg| {
++                        match arg {
++                            Operand::Copy(place) | Operand::Move(place) => Some(place.clone()),
++                            Operand::Constant(_) => None,
++                        }
++                    })
++                    .collect_vec();
+                 let ret = match kind {
+                     mir::CallKind::FnDef { resolved_id, resolved_args, .. } => {
+                         let fn_sig = self.genv.fn_sig(*resolved_id).with_span(terminator_span)?;
+@@ -799,6 +842,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                             fn_sig,
+                             &generic_args,
+                             &actuals,
++                            &actual_places,
+                         )?
+                         .output
+                     }
+@@ -816,6 +860,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                                 EarlyBinder(fn_sig.clone()),
+                                 &[],
+                                 &actuals,
++                                &actual_places,
+                             )?
+                             .output
+                         } else {
+@@ -892,12 +937,14 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+         fn_sig: EarlyBinder<PolyFnSig>,
+         generic_args: &[GenericArg],
+         actuals: &[Ty],
++        actual_places: &[Option<Place>],
+     ) -> Result<ResolvedCall> {
+         let genv = self.genv;
+         let tcx = genv.tcx();
+ 
+         let actuals =
+-            unfold_local_ptrs(infcx, env, fn_sig.skip_binder_ref(), actuals).with_span(span)?;
++            unfold_local_ptrs(infcx, env, fn_sig.skip_binder_ref(), actuals, actual_places)
++                .with_span(span)?;
+         let actuals = infer_under_mut_ref_hack(infcx, &actuals, fn_sig.skip_binder_ref());
+         infcx.push_evar_scope();
+ 
+@@ -1483,6 +1530,15 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                 let actuals = self
+                     .check_operands(infcx, env, stmt_span, operands)
+                     .with_span(stmt_span)?;
++                let actual_places = operands
++                    .iter()
++                    .map(|operand| {
++                        match operand {
++                            Operand::Copy(place) | Operand::Move(place) => Some(place.clone()),
++                            Operand::Constant(_) => None,
++                        }
++                    })
++                    .collect_vec();
+                 let sig = genv
+                     .variant_sig(*def_id, *variant_idx)
+                     .with_span(stmt_span)?
+@@ -1497,8 +1553,17 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                     args,
+                 )
+                 .with_span(stmt_span)?;
+-                self.check_call(infcx, env, stmt_span, Some(*def_id), sig, &args, &actuals)
+-                    .map(|resolved_call| resolved_call.output)
++                self.check_call(
++                    infcx,
++                    env,
++                    stmt_span,
++                    Some(*def_id),
++                    sig,
++                    &args,
++                    &actuals,
++                    &actual_places,
++                )
++                .map(|resolved_call| resolved_call.output)
+             }
+             Rvalue::Aggregate(AggregateKind::Array(arr_ty), operands) => {
+                 let args = self
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..a1c368a 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -40,7 +40,7 @@ use rustc_span::{Span, Symbol};
+ use rustc_type_ir::BoundVar;
+ use serde::Serialize;
+ 
+-use self::place_ty::{LocKind, PlacesTree};
++use self::place_ty::{LocKind, LocalPtr, PlacesTree, RefOrigin};
+ use super::rty::Sort;
+ 
+ #[derive(Clone, Default)]
+@@ -160,15 +160,35 @@ impl<'a> TypeEnv<'a> {
+         let TyKind::Ptr(PtrKind::Mut(re), path) = lookup.ty.kind() else {
+             tracked_span_bug!("ptr_to_borrow called on non mutable pointer type")
+         };
++        let re = *re;
++        let path = path.clone();
+ 
+         let ref_ty =
+-            self.ptr_to_ref(infcx, ConstrReason::Other, *re, path, PtrToRefBound::Infer)?;
++            self.ptr_to_ref(infcx, ConstrReason::Other, re, &path, PtrToRefBound::Infer)?;
+ 
+         self.bindings.lookup(place, infcx.span).update(ref_ty);
++        self.bindings
++            .set_ref_origin(place, RefOrigin { place: None, pointee: None, path: Some(path) });
+ 
+         Ok(())
+     }
+ 
++    pub(crate) fn ref_origin(&self, place: &Place) -> Option<RefOrigin> {
++        self.bindings.ref_origin(place)
++    }
++
++    pub(crate) fn set_ref_origin_from_place(&mut self, dest: &Place, src: &Place) {
++        let origin = self
++            .ref_origin(src)
++            .unwrap_or_else(|| RefOrigin { place: Some(src.clone()), pointee: None, path: None });
++        self.bindings.set_ref_origin(dest, origin);
++    }
++
++    pub(crate) fn set_ref_origin_from_borrow(&mut self, dest: &Place, pointee: &Place) {
++        let origin = RefOrigin { place: None, pointee: Some(pointee.clone()), path: None };
++        self.bindings.set_ref_origin(dest, origin);
++    }
++
+     /// Convert a (strong) pointer to a mutable reference.
+     ///
+     /// This roughly implements the following inference rule:
+@@ -230,8 +250,33 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+-        for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++        for (loc, local_ptr, ty) in self.bindings.local_ptrs() {
++            if let Some((source, re, origin)) = local_ptr.source {
++                if let Some(origin) = origin {
++                    if let Some(place) = origin.place {
++                        self.bindings.lookup(&place, infcx.span).update(Ty::mk_ref(
++                            re,
++                            ty.clone(),
++                            Mutability::Mut,
++                        ));
++                    }
++                    if let Some(pointee) = origin.pointee {
++                        self.bindings
++                            .lookup(&pointee, infcx.span)
++                            .update(ty.clone());
++                    }
++                    if let Some(path) = origin.path {
++                        self.bindings.lookup(&path, infcx.span).update(ty.clone());
++                    }
++                }
++                self.bindings.lookup(&source, infcx.span).update(Ty::mk_ref(
++                    re,
++                    ty,
++                    Mutability::Mut,
++                ));
++            } else {
++                infcx.subtyping(&ty, &local_ptr.bound, ConstrReason::FoldLocal)?;
++            }
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+@@ -324,12 +369,13 @@ impl<'a> TypeEnv<'a> {
+         &mut self,
+         infcx: &mut InferCtxt,
+         bound: &Ty,
++        source: Option<(Place, Region, Option<RefOrigin>)>,
+     ) -> InferResult<Loc> {
+         let name = infcx.define_unknown_var(&Sort::Loc);
+         let loc = Loc::from(name);
+         let ty = infcx.unpack(bound);
+-        self.bindings
+-            .insert(loc, LocKind::LocalPtr(bound.clone()), ty);
++        let local_ptr = LocalPtr { bound: bound.clone(), source };
++        self.bindings.insert(loc, LocKind::LocalPtr(local_ptr), ty);
+         Ok(loc)
+     }
+ 
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..c4e577b 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -10,7 +10,7 @@ use flux_middle::{
+     queries::QueryResult,
+     rty::{
+         AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt, List,
+-        Loc, Mutability, Path, PtrKind, Ref, Sort, Ty, TyKind, VariantIdx, VariantSig,
++        Loc, Mutability, Path, PtrKind, Ref, Region, Sort, Ty, TyKind, VariantIdx, VariantSig,
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+     },
+ };
+@@ -34,11 +34,25 @@ pub(crate) struct Binding {
+ pub(crate) enum LocKind {
+     Local,
+     Box(GenericArg),
++    RefOrigin(RefOrigin),
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+-    LocalPtr(Ty),
++    LocalPtr(LocalPtr),
+     Universal,
+ }
+ 
++#[derive(Clone, Eq, PartialEq, Debug)]
++pub(crate) struct RefOrigin {
++    pub place: Option<Place>,
++    pub pointee: Option<Place>,
++    pub path: Option<Path>,
++}
++
++#[derive(Clone, Eq, PartialEq, Debug)]
++pub(crate) struct LocalPtr {
++    pub bound: Ty,
++    pub source: Option<(Place, Region, Option<RefOrigin>)>,
++}
++
+ pub(crate) trait LookupKey {
+     fn loc(&self) -> Loc;
+ 
+@@ -292,12 +306,12 @@ impl PlacesTree {
+         self.map.shift_remove(loc);
+     }
+ 
+-    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Ty)> {
++    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, LocalPtr, Ty)> {
+         self.map
+             .iter()
+             .filter_map(|(loc, binding)| {
+-                if let LocKind::LocalPtr(bound) = &binding.kind {
+-                    Some((*loc, bound.clone(), binding.ty.clone()))
++                if let LocKind::LocalPtr(local_ptr) = &binding.kind {
++                    Some((*loc, local_ptr.clone(), binding.ty.clone()))
+                 } else {
+                     None
+                 }
+@@ -348,6 +362,22 @@ impl PlacesTree {
+             .unwrap_or_else(|| tracked_span_bug!("loc not found {loc:?}"))
+     }
+ 
++    pub(crate) fn ref_origin(&self, place: &Place) -> Option<RefOrigin> {
++        if place.projection.is_empty()
++            && let LocKind::RefOrigin(origin) = &self.get_loc(&Loc::Local(place.local)).kind
++        {
++            Some(origin.clone())
++        } else {
++            None
++        }
++    }
++
++    pub(crate) fn set_ref_origin(&mut self, place: &Place, origin: RefOrigin) {
++        if place.projection.is_empty() {
++            self.get_loc_mut(&Loc::Local(place.local)).kind = LocKind::RefOrigin(origin);
++        }
++    }
++
+     fn get_loc_mut(&mut self, loc: &Loc) -> &mut Binding {
+         self.map
+             .get_mut(loc)
+@@ -959,9 +989,11 @@ mod pretty {
+     impl Pretty for LocKind {
+         fn fmt(&self, cx: &PrettyCx, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+             match self {
+-                LocKind::Local | LocKind::Universal => Ok(()),
++                LocKind::Local | LocKind::RefOrigin(_) | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+-                LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::LocalPtr(local_ptr) => {
++                    w!(cx, f, "[local-ptr({:?})]", &local_ptr.bound)
++                }
+             }
+         }
+     }

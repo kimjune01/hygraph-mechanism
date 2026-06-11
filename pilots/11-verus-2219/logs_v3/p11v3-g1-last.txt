@@ -1,0 +1,34 @@
+VERDICT: reported program now correctly REJECTED.
+
+Generalization probes:
+- `reported.rs`: REJECTED, E0382 `use of moved value: t`.
+- `concrete_tracked.rs`: REJECTED, E0382.
+- `direct_spec_stmt.rs`: REJECTED, E0382.
+- `let_never_initializer.rs`: REJECTED, E0382.
+- `spec_never_fn.rs`: REJECTED by existing `never-to-any coercion is not allowed in spec mode`.
+
+Over-rejection probes:
+- `valid_no_double_consume.rs`: VERIFIED, `3 verified, 0 errors`.
+- `valid_let_never_single_consume.rs`: VERIFIED, `2 verified, 0 errors`.
+- `valid_exec_real_diverge.rs`: VERIFIED, `4 verified, 0 errors`; real diverging call still leaves later code unreachable.
+
+Regression:
+- `vargo test -p rust_verify_test --test lifetime`: PASSED, `94 passed; 0 failed`.
+
+Changed source files/functions:
+- [verus.rs](/Users/junekim/Documents/verus-p11/source/rustc_mir_build_additional_files/verus.rs): added `is_erased_expr_kind`.
+- [as_operand.rs](/Users/junekim/Documents/verus-p11/source/rustc_mir_build/src/builder/expr/as_operand.rs): changed `Builder::as_operand`.
+- [stmt.rs](/Users/junekim/Documents/verus-p11/source/rustc_mir_build/src/builder/expr/stmt.rs): changed `Builder::stmt_expr`.
+- [matches/mod.rs](/Users/junekim/Documents/verus-p11/source/rustc_mir_build/src/builder/matches/mod.rs): changed `Builder::expr_into_pattern` and `Builder::lower_let_expr`.
+
+Root cause/fix:
+Verus erases ghost/spec code into synthetic `erased_ghost_value` THIR/MIR placeholders. When the erased expression had Rust type `!`, MIR lowering treated the synthetic placeholder like a real diverging value, so rustc reachability/borrow checking skipped later tracked moves. The fix detects Verus-erased `!` placeholders during MIR lowering and treats them as non-diverging checking placeholders in operand, statement, and pattern-initializer contexts, while leaving real non-erased `!` divergence unchanged.
+
+`git diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/expr/as_operand.rs |  8 ++++++++
+ source/rustc_mir_build/src/builder/expr/stmt.rs       |  3 +++
+ source/rustc_mir_build/src/builder/matches/mod.rs     | 12 +++++++++++-
+ source/rustc_mir_build_additional_files/verus.rs      | 19 +++++++++++++++++++
+ 4 files changed, 41 insertions(+), 1 deletion(-)
+```

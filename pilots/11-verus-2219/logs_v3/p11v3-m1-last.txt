@@ -1,0 +1,25 @@
+VERDICT: reported program now correctly REJECTED with `error[E0382]: use of moved value: t`.
+
+Regression suite: PASS
+`vargo test -p rust_verify_test --test lifetime`
+Result: `94 passed; 0 failed`.
+
+Changed source:
+`source/rustc_mir_build/src/builder/mod.rs`
+Function: `Builder::lint_and_remove_uninhabited`
+Added helper: `is_verus_erased_ghost_value_call`
+
+Root cause / fix:
+Rust MIR construction removed the normal return edge for calls whose destination type is uninhabited. Verus erases ghost/proof expressions into synthetic `verus_builtin::erased_ghost_value` calls, so an erased ghost expression of type `!` or another uninhabited type made later code unreachable to Rust borrow checking. The fix preserves the return edge specifically for synthetic `erased_ghost_value` calls while leaving real uninhabited-returning calls unchanged.
+
+Adversarial checks:
+- `/tmp/p11m-scratch/issue2219.rs`: REJECTED, `E0382 use of moved value`.
+- `/tmp/p11m-scratch/never_let_double_consume.rs`: REJECTED, `E0382 use of moved value`.
+- `/tmp/p11m-scratch/infallible_double_consume.rs`: REJECTED, `E0382 use of moved value`.
+- `/tmp/p11m-scratch/issue2219_single_consume_valid.rs`: ACCEPTED, `3 verified, 0 errors`.
+
+`git -C /Users/junekim/Documents/verus-p11 diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+```

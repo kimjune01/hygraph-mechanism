@@ -1,0 +1,14 @@
+P08V2 DRIVER START Thu 11 Jun 2026 08:33:46 PDT
+[p08v2 08:33] graph draw 1
+[p08v2 08:49] graph draw 1 -> VERIFY/VERIFY/E0999 = general+sound
+[p08v2 08:49] minimal draw 1
+[p08v2 08:58] minimal draw 1 -> VERIFY/E0999/E0999 = OVER-NARROW(T2)
+[p08v2 08:58] graph draw 2
+[p08v2 09:23] graph draw 2 -> VERIFY/VERIFY/E0999 = general+sound
+[p08v2 09:23] minimal draw 2
+[p08v2 09:46] minimal draw 2 -> VERIFY/VERIFY/E0999 = general+sound
+[p08v2 09:46] graph draw 3
+[p08v2 10:04] graph draw 3 -> VERIFY/VERIFY/E0999 = general+sound
+[p08v2 10:04] minimal draw 3
+[p08v2 10:16] minimal draw 3 -> VERIFY/VERIFY/E0999 = general+sound
+P08V2 DRIVER DONE Thu 11 Jun 2026 10:16:40 PDT

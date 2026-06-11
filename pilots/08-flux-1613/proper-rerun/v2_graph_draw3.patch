@@ -1,0 +1,327 @@
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79df..d5778ca 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -110,6 +110,11 @@ struct ResolvedCall {
+     _late_args: Vec<Expr>,
+ }
+ 
++struct CallActual {
++    ty: Ty,
++    place: Option<Place>,
++}
++
+ impl<'ck, M: Mode> Inherited<'ck, M> {
+     fn new(
+         mode: &'ck mut M,
+@@ -447,7 +452,7 @@ fn unfold_local_ptrs(
+             TyKind::StrgRef(_, _, _),
+         ) = (actual.kind(), input.kind())
+         {
+-            let loc = env.unfold_local_ptr(infcx, bound)?;
++            let loc = env.unfold_local_ptr(infcx, bound, None)?;
+             let path1 = Path::new(loc, rty::List::empty());
+             Ty::ptr(PtrKind::Mut(*re), path1)
+         } else {
+@@ -458,6 +463,32 @@ fn unfold_local_ptrs(
+     Ok(tys)
+ }
+ 
++fn unfold_call_actuals(
++    infcx: &mut InferCtxt,
++    env: &mut TypeEnv,
++    fn_sig: &PolyFnSig,
++    actuals: &[CallActual],
++) -> InferResult<Vec<Ty>> {
++    let fn_sig = fn_sig.skip_binder_ref();
++    let mut tys = vec![];
++    for (actual, input) in izip!(actuals, fn_sig.inputs()) {
++        let actual_ty = &actual.ty;
++        let actual_ty = if let (
++            TyKind::Indexed(BaseTy::Ref(re, bound, Mutability::Mut), _),
++            TyKind::StrgRef(_, _, _),
++        ) = (actual_ty.kind(), input.kind())
++        {
++            let loc = env.unfold_local_ptr(infcx, bound, actual.place.clone())?;
++            let path1 = Path::new(loc, rty::List::empty());
++            Ty::ptr(PtrKind::Mut(*re), path1)
++        } else {
++            actual_ty.clone()
++        };
++        tys.push(actual_ty);
++    }
++    Ok(tys)
++}
++
+ /// Fold local pointers implements roughly a rule like the following (for all local pointers)
+ /// that converts the local pointers created via [`unfold_local_ptrs`] back into `&mut`.
+ ///
+@@ -699,6 +730,9 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                 let ty = self.check_rvalue(infcx, env, stmt_span, rvalue)?;
+                 self.check_assign_ty(infcx, env, place, ty, stmt_span)
+                     .with_span(stmt_span)?;
++                if let Rvalue::Ref(_, BorrowKind::Mut { .. }, source) = rvalue {
++                    env.set_reborrow_alias(place, source);
++                }
+             }
+             StatementKind::SetDiscriminant { .. } => {
+                 // TODO(nilehmann) double check here that the place is unfolded to
+@@ -779,7 +813,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+             }
+             TerminatorKind::Call { kind, args, destination, target, .. } => {
+                 let actuals = self
+-                    .check_operands(infcx, env, terminator_span, args)
++                    .check_call_operands(infcx, env, terminator_span, args)
+                     .with_span(terminator_span)?;
+                 let ret = match kind {
+                     mir::CallKind::FnDef { resolved_id, resolved_args, .. } => {
+@@ -891,13 +925,13 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+         callee_def_id: Option<DefId>,
+         fn_sig: EarlyBinder<PolyFnSig>,
+         generic_args: &[GenericArg],
+-        actuals: &[Ty],
++        actuals: &[CallActual],
+     ) -> Result<ResolvedCall> {
+         let genv = self.genv;
+         let tcx = genv.tcx();
+ 
+         let actuals =
+-            unfold_local_ptrs(infcx, env, fn_sig.skip_binder_ref(), actuals).with_span(span)?;
++            unfold_call_actuals(infcx, env, fn_sig.skip_binder_ref(), actuals).with_span(span)?;
+         let actuals = infer_under_mut_ref_hack(infcx, &actuals, fn_sig.skip_binder_ref());
+         infcx.push_evar_scope();
+ 
+@@ -1483,6 +1517,10 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+                 let actuals = self
+                     .check_operands(infcx, env, stmt_span, operands)
+                     .with_span(stmt_span)?;
++                let actuals = actuals
++                    .into_iter()
++                    .map(|ty| CallActual { ty, place: None })
++                    .collect_vec();
+                 let sig = genv
+                     .variant_sig(*def_id, *variant_idx)
+                     .with_span(stmt_span)?
+@@ -1783,6 +1821,26 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+             .try_collect()
+     }
+ 
++    fn check_call_operands(
++        &mut self,
++        infcx: &mut InferCtxt<'_, 'genv, 'tcx>,
++        env: &mut TypeEnv,
++        span: Span,
++        operands: &[Operand<'tcx>],
++    ) -> InferResult<Vec<CallActual>> {
++        operands
++            .iter()
++            .map(|op| {
++                let ty = self.check_operand(infcx, env, span, op)?;
++                let place = match op {
++                    Operand::Copy(place) | Operand::Move(place) => env.reborrow_alias(place),
++                    Operand::Constant(_) => None,
++                };
++                Ok(CallActual { ty, place })
++            })
++            .try_collect()
++    }
++
+     fn check_operand(
+         &mut self,
+         infcx: &mut InferCtxt<'_, 'genv, 'tcx>,
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..a079b8f 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -20,8 +20,8 @@ use flux_middle::{
+     queries::QueryResult,
+     rty::{
+         BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FnSig, GenericArg, HoleKind,
+-        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, SortCtor, SubsetTy, Ty,
+-        TyKind, VariantIdx,
++        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, Sort, SortCtor, SubsetTy,
++        Ty, TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+         region_matching::{rty_match_regions, ty_match_regions},
+@@ -33,7 +33,7 @@ use flux_rustc_bridge::{
+     ty,
+ };
+ use itertools::{Itertools, izip};
+-use rustc_data_structures::unord::UnordMap;
++use rustc_data_structures::{fx::FxHashMap, unord::UnordMap};
+ use rustc_index::{IndexSlice, IndexVec};
+ use rustc_middle::{mir::RETURN_PLACE, ty::TyCtxt};
+ use rustc_span::{Span, Symbol};
+@@ -41,12 +41,12 @@ use rustc_type_ir::BoundVar;
+ use serde::Serialize;
+ 
+ use self::place_ty::{LocKind, PlacesTree};
+-use super::rty::Sort;
+ 
+ #[derive(Clone, Default)]
+ pub struct TypeEnv<'a> {
+     bindings: PlacesTree,
+     local_decls: &'a LocalDecls,
++    reborrow_aliases: FxHashMap<Local, Place>,
+ }
+ 
+ pub struct BasicBlockEnvShape {
+@@ -67,7 +67,11 @@ struct BasicBlockEnvData {
+ 
+ impl<'a> TypeEnv<'a> {
+     pub fn new(infcx: &mut InferCtxt, body: &'a Body, fn_sig: &FnSig) -> TypeEnv<'a> {
+-        let mut env = TypeEnv { bindings: PlacesTree::default(), local_decls: &body.local_decls };
++        let mut env = TypeEnv {
++            bindings: PlacesTree::default(),
++            local_decls: &body.local_decls,
++            reborrow_aliases: FxHashMap::default(),
++        };
+ 
+         for requires in fn_sig.requires() {
+             infcx.assume_pred(requires);
+@@ -88,7 +92,11 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub fn empty() -> TypeEnv<'a> {
+-        TypeEnv { bindings: PlacesTree::default(), local_decls: IndexSlice::empty() }
++        TypeEnv {
++            bindings: PlacesTree::default(),
++            local_decls: IndexSlice::empty(),
++            reborrow_aliases: FxHashMap::default(),
++        }
+     }
+ 
+     fn alloc_with_ty(&mut self, local: Local, ty: Ty) {
+@@ -230,8 +238,15 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+-        for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++        let span = infcx.span;
++        for (loc, bound, source, ty) in self.bindings.local_ptrs() {
++            if let Some(source) = source {
++                self.bindings
++                    .lookup_unfolding(infcx.infcx, &source, span)?
++                    .update(ty);
++            } else {
++                infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            }
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+@@ -254,6 +269,9 @@ impl<'a> TypeEnv<'a> {
+         place: &Place,
+         new_ty: Ty,
+     ) -> InferResult {
++        if place.projection.is_empty() {
++            self.reborrow_aliases.remove(&place.local);
++        }
+         let rustc_ty = place.ty(infcx.genv, self.local_decls)?.ty;
+         let new_ty = ty_match_regions(&new_ty, &rustc_ty);
+         let span = infcx.span;
+@@ -266,6 +284,20 @@ impl<'a> TypeEnv<'a> {
+         Ok(())
+     }
+ 
++    pub(crate) fn set_reborrow_alias(&mut self, place: &Place, source: &Place) {
++        if place.projection.is_empty() {
++            self.reborrow_aliases.insert(place.local, source.clone());
++        }
++    }
++
++    pub(crate) fn reborrow_alias(&self, place: &Place) -> Option<Place> {
++        if place.projection.is_empty() {
++            self.reborrow_aliases.get(&place.local).cloned()
++        } else {
++            None
++        }
++    }
++
+     pub(crate) fn move_place(&mut self, infcx: &mut InferCtxtAt, place: &Place) -> InferResult<Ty> {
+         let span = infcx.span;
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+@@ -324,12 +356,13 @@ impl<'a> TypeEnv<'a> {
+         &mut self,
+         infcx: &mut InferCtxt,
+         bound: &Ty,
++        source: Option<Place>,
+     ) -> InferResult<Loc> {
+         let name = infcx.define_unknown_var(&Sort::Loc);
+         let loc = Loc::from(name);
+         let ty = infcx.unpack(bound);
+         self.bindings
+-            .insert(loc, LocKind::LocalPtr(bound.clone()), ty);
++            .insert(loc, LocKind::LocalPtr(bound.clone(), source), ty);
+         Ok(loc)
+     }
+ 
+@@ -449,7 +482,11 @@ impl flux_infer::infer::LocEnv for TypeEnv<'_> {
+ 
+ impl BasicBlockEnvShape {
+     pub fn enter<'a>(&self, local_decls: &'a LocalDecls) -> TypeEnv<'a> {
+-        TypeEnv { bindings: self.bindings.clone(), local_decls }
++        TypeEnv {
++            bindings: self.bindings.clone(),
++            local_decls,
++            reborrow_aliases: FxHashMap::default(),
++        }
+     }
+ 
+     fn new(scope: Scope, env: TypeEnv) -> BasicBlockEnvShape {
+@@ -824,7 +861,7 @@ impl BasicBlockEnv {
+         for constr in &data.constrs {
+             infcx.assume_pred(constr);
+         }
+-        TypeEnv { bindings: data.bindings, local_decls }
++        TypeEnv { bindings: data.bindings, local_decls, reborrow_aliases: FxHashMap::default() }
+     }
+ 
+     pub(crate) fn scope(&self) -> &Scope {
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..675304c 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -35,7 +35,7 @@ pub(crate) enum LocKind {
+     Local,
+     Box(GenericArg),
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+-    LocalPtr(Ty),
++    LocalPtr(Ty, Option<Place>),
+     Universal,
+ }
+ 
+@@ -292,12 +292,12 @@ impl PlacesTree {
+         self.map.shift_remove(loc);
+     }
+ 
+-    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Ty)> {
++    pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Option<Place>, Ty)> {
+         self.map
+             .iter()
+             .filter_map(|(loc, binding)| {
+-                if let LocKind::LocalPtr(bound) = &binding.kind {
+-                    Some((*loc, bound.clone(), binding.ty.clone()))
++                if let LocKind::LocalPtr(bound, source) = &binding.kind {
++                    Some((*loc, bound.clone(), source.clone(), binding.ty.clone()))
+                 } else {
+                     None
+                 }
+@@ -887,6 +887,7 @@ fn fold(
+             let deref_ty = fold(bindings, infcx, deref_ty, is_strg)?;
+             Ok(Ty::mk_ref(*re, deref_ty, *mutbl))
+         }
++        TyKind::Blocked(ty) => fold(bindings, infcx, ty, is_strg),
+         TyKind::Downcast(adt, args, ty_, variant_idx, fields) => {
+             if is_strg {
+                 let variant_sig = infcx
+@@ -961,7 +962,7 @@ mod pretty {
+             match self {
+                 LocKind::Local | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+-                LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::LocalPtr(ty, _) => w!(cx, f, "[local-ptr({:?})]", ty),
+             }
+         }
+     }

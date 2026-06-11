@@ -1,0 +1,37 @@
+VERDICT: fixed.
+
+Reported program:
+- VERIFIED after fix: `summary. 2 functions processed: 1 checked; 1 trusted; 0 ignored. 1 constraints solved.`
+- Original failing obligation was `FoldLocal`: `forall a. ((a = 0 || old_hdl(a)) = old_hdl(a))`
+
+Generalization / perturbation results:
+- `reported.rs`: before FAIL, after VERIFY
+- `direct_arg.rs`: before FAIL, after VERIFY
+- `noop_setter.rs`: before VERIFY, after VERIFY
+- `scalar_grow.rs`: before FAIL, after VERIFY
+- `no_field_invariant.rs`: before FAIL, after VERIFY
+- `invalid_shrink.rs`: after fix still REJECTED with E0999 at outer fold, note points to `slot.len > 0`
+- `post_visible.rs`: unusable probe; rejected by surface desugaring syntax, not counted
+
+Regression:
+- `cargo xtask test --suite basic abstract`: PASS
+- 7 positive tests passed, 5 compile-fail tests passed
+- Note: this checkout uses positional filter syntax; the requested `--filter abstract` form is rejected by `xtask`.
+
+Changed source:
+- `crates/flux-refineck/src/type_env.rs`
+  - `TypeEnv::fold_local_ptrs`
+- `crates/flux-refineck/src/type_env/place_ty.rs`
+  - added `PlacesTree::replace_mut_ref_bound`
+  - added `pack_local_ptr_bound`
+  - added local `TypeFolder` helpers for existential packing and mut-ref bound replacement
+
+Root cause / fix:
+`fold_local_ptrs` required the callee-updated pointee type to subtype the exact pre-call mutable-reference bound, forcing equality between old and new abstract indices. For abstract refinement setters this emitted an impossible equality such as `forall a. (a == 0 || old(a)) == old(a)`. The fix folds local pointers against an existentially packed version of the original bound, preserving bound predicates while allowing the abstract index to change, then rewrites matching mutable-reference bounds in the environment to the updated pointee type so later folds validate the post-call state.
+
+`git diff --stat`:
+```text
+crates/flux-refineck/src/type_env.rs          |  4 +-
+crates/flux-refineck/src/type_env/place_ty.rs | 64 ++++++++++++++++++++++++++-
+2 files changed, 66 insertions(+), 2 deletions(-)
+```

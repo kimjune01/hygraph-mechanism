@@ -1,0 +1,20 @@
+diff --git a/source/rust_verify/src/fn_call_to_vir.rs b/source/rust_verify/src/fn_call_to_vir.rs
+index 6eab2f8..0488660 100644
+--- a/source/rust_verify/src/fn_call_to_vir.rs
++++ b/source/rust_verify/src/fn_call_to_vir.rs
+@@ -2557,6 +2557,15 @@ fn mk_vir_args<'tcx>(
+     args.iter()
+         .zip(raw_inputs)
+         .map(|(arg, raw_param)| {
++            if bctx.in_ghost
++                && (matches!(raw_param.kind(), TyKind::Never)
++                    || matches!(bctx.types.expr_ty_adjusted(arg).kind(), TyKind::Never))
++            {
++                return err_span(
++                    arg.span,
++                    "ghost function calls cannot use the never type `!` as an argument",
++                );
++            }
+             let is_mut_ref_param = !bctx.new_mut_ref
+                 && match raw_param.kind() {
+                     TyKind::Ref(_, _, rustc_hir::Mutability::Mut) => true,

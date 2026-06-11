@@ -1,0 +1,73 @@
+diff --git a/source/rustc_mir_build/src/thir/cx/expr.rs b/source/rustc_mir_build/src/thir/cx/expr.rs
+index c5ed968..c00a68a 100644
+--- a/source/rustc_mir_build/src/thir/cx/expr.rs
++++ b/source/rustc_mir_build/src/thir/cx/expr.rs
+@@ -1155,6 +1155,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
+         } else {
+             crate::verus_expr::mirror_expr_post(self, expr, kind)
+         };
++        let expr_ty = crate::verus::normalize_erased_ghost_value_ty(self, &kind, expr_ty);
+         mk_expr(kind, expr_ty)
+     }
+ 
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..c93c71c 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -536,6 +536,21 @@ pub(crate) fn is_node_with_single_arg_erased<'tcx>(
+     }
+ }
+ 
++pub(crate) fn normalize_erased_ghost_value_ty<'tcx>(
++    cx: &ThirBuildCx<'tcx>,
++    kind: &rustc_middle::thir::ExprKind<'tcx>,
++    ty: Ty<'tcx>,
++) -> Ty<'tcx> {
++    let Some(erasure_ctxt) = cx.verus_ctxt.ctxt.as_ref() else {
++        return ty;
++    };
++    if ty.is_never() && is_erased(cx, erasure_ctxt, kind) {
++        ghost_placeholder_ty(cx, ty)
++    } else {
++        ty
++    }
++}
++
+ /// Produce an expression `builtin::erased_ghost_value::<T>(())`
+ /// The hir_id is used for the scope so it needs to correspond to something that will
+ /// get a scope in the final THIR.
+@@ -546,6 +561,7 @@ pub(crate) fn erased_ghost_value<'tcx>(
+     span: Span,
+     ty: Ty<'tcx>,
+ ) -> ExprId {
++    let ty = ghost_placeholder_ty(cx, ty);
+     let kind = erased_ghost_value_kind(cx, erasure_ctxt, hir_id, span, ty);
+     expr_id_from_kind(cx, kind, hir_id, span, ty)
+ }
+@@ -570,6 +586,7 @@ fn erased_ghost_value_with_args<'tcx>(
+     ty: Ty<'tcx>,
+     expr_args: Vec<ExprId>,
+ ) -> ExprId {
++    let ty = ghost_placeholder_ty(cx, ty);
+     let kind = erased_ghost_value_kind_with_args(cx, erasure_ctxt, hir_id, span, ty, expr_args);
+     expr_id_from_kind(cx, kind, hir_id, span, ty)
+ }
+@@ -582,6 +599,7 @@ pub(crate) fn erased_ghost_value_kind_with_args<'tcx>(
+     ty: Ty<'tcx>,
+     expr_args: Vec<ExprId>,
+ ) -> ExprKind<'tcx> {
++    let ty = ghost_placeholder_ty(cx, ty);
+     let tup_tys = expr_args.iter().map(|e| cx.thir.exprs[*e].ty).collect::<Vec<_>>();
+     let tup_ty = Ty::new_tup(cx.tcx, &tup_tys);
+ 
+@@ -606,6 +624,10 @@ pub(crate) fn erased_ghost_value_kind_with_args<'tcx>(
+     }
+ }
+ 
++fn ghost_placeholder_ty<'tcx>(cx: &ThirBuildCx<'tcx>, ty: Ty<'tcx>) -> Ty<'tcx> {
++    if ty.is_never() { Ty::new_tup(cx.tcx, &[]) } else { ty }
++}
++
+ pub(crate) fn erase_body<'tcx>(cx: &mut ThirBuildCx<'tcx>, local_def_id: LocalDefId) -> bool {
+     let Some(erasure_ctxt) = cx.verus_ctxt.ctxt.clone() else {
+         return false;

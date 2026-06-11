@@ -1,0 +1,6 @@
+draw   arm      T1      T2      T3      verdict
+1      graph    REJECT  VERIFY  VERIFY  OVER-NARROW(T2)
+1      minimal  REJECT  VERIFY  VERIFY  OVER-NARROW(T2)
+2      graph    REJECT  VERIFY  VERIFY  OVER-NARROW(T2)
+3      graph    REJECT  VERIFY  VERIFY  OVER-NARROW(T2)
+2      minimal  REJECT  VERIFY  VERIFY  OVER-NARROW(T2)

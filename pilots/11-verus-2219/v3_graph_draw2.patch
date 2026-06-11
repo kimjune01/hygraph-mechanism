@@ -1,0 +1,60 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..81e9eca 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,7 +845,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref func, ref mut target, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+@@ -877,6 +878,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 };
+ 
+             if !ty_is_inhabited {
++                if crate::verus::is_erased_ghost_value_func(func) {
++                    continue;
++                }
++
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..169debb 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -8,7 +8,7 @@ use rustc_hir::def::Res;
+ use rustc_hir::def_id::{DefId, LocalDefId};
+ use rustc_middle::hir::place::{Place, Projection, ProjectionKind};
+ use rustc_middle::middle::region;
+-use rustc_middle::mir::FakeReadCause;
++use rustc_middle::mir::{FakeReadCause, Operand};
+ use rustc_middle::thir;
+ use rustc_middle::thir::{
+     AdtExprBase, Arm, ArmId, Block, BlockId, BlockSafety, Expr, ExprId, ExprKind, LocalVarId, Pat,
+@@ -513,6 +513,21 @@ pub(crate) fn is_erased<'tcx>(
+     }
+ }
+ 
++/// Is this MIR operand the function item for Verus's synthetic erased ghost value call?
++pub(crate) fn is_erased_ghost_value_func<'tcx>(operand: &Operand<'tcx>) -> bool {
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++
++    match operand {
++        Operand::Constant(c) => match c.const_.ty().kind() {
++            TyKind::FnDef(fn_def_id, _) => *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id,
++            _ => false,
++        },
++        Operand::Copy(_) | Operand::Move(_) => false,
++    }
++}
++
+ /// Given an expression like `&x`, `*x` or `x.field`, determine if it should be erased
+ /// by looking at if `x` is erased.
+ pub(crate) fn is_node_with_single_arg_erased<'tcx>(

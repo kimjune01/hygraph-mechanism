@@ -1,0 +1,47 @@
+diff --git a/crates/flux-infer/src/infer.rs b/crates/flux-infer/src/infer.rs
+index cb6e8a6..712e8b7 100644
+--- a/crates/flux-infer/src/infer.rs
++++ b/crates/flux-infer/src/infer.rs
+@@ -1141,6 +1141,9 @@ impl<'a, E: LocEnv> Sub<'a, E> {
+ 
+             (_, ExprKind::Ctor(Ctor::Struct(def_id), flds_b)) => {
+                 for (f, b) in flds_b.iter().enumerate() {
++                    if self.ignore_projection_for_fold_local(infcx, *def_id, f as u32) {
++                        continue;
++                    }
+                     let proj = FieldProj::Adt { def_id: *def_id, field: f as u32 };
+                     let a = a.proj_and_reduce(proj);
+                     self.idxs_eq(infcx, &a, b);
+@@ -1166,6 +1169,9 @@ impl<'a, E: LocEnv> Sub<'a, E> {
+             (ExprKind::Ctor(Ctor::Struct(def_id), flds_a), _) => {
+                 infcx.unify_exprs(a, b);
+                 for (f, a) in flds_a.iter().enumerate() {
++                    if self.ignore_projection_for_fold_local(infcx, *def_id, f as u32) {
++                        continue;
++                    }
+                     let proj = FieldProj::Adt { def_id: *def_id, field: f as u32 };
+                     let b = b.proj_and_reduce(proj);
+                     self.idxs_eq(infcx, a, &b);
+@@ -1193,6 +1199,22 @@ impl<'a, E: LocEnv> Sub<'a, E> {
+         }
+     }
+ 
++    fn ignore_projection_for_fold_local(
++        &self,
++        infcx: &InferCtxt,
++        def_id: DefId,
++        field: u32,
++    ) -> bool {
++        if self.reason != ConstrReason::FoldLocal {
++            return false;
++        }
++        let Ok(sort_def) = infcx.genv.adt_sort_def_of(def_id) else {
++            tracked_span_bug!("missing sort definition for `{def_id:?}`");
++        };
++        let field_sorts = sort_def.struct_variant().field_sorts_instantiate_identity();
++        matches!(&field_sorts[field as usize], Sort::Func(_))
++    }
++
+     fn abs_eq(&mut self, infcx: &mut InferCtxt, a: &Lambda, b: &Lambda) {
+         debug_assert_eq!(a.vars().len(), b.vars().len());
+         let vars = a

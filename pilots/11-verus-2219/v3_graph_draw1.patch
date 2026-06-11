@@ -1,0 +1,100 @@
+diff --git a/source/rustc_mir_build/src/builder/expr/as_operand.rs b/source/rustc_mir_build/src/builder/expr/as_operand.rs
+index 5989a15..8a51356 100644
+--- a/source/rustc_mir_build/src/builder/expr/as_operand.rs
++++ b/source/rustc_mir_build/src/builder/expr/as_operand.rs
+@@ -132,6 +132,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         let category = Category::of(&expr.kind).unwrap();
+         debug!(?category, ?expr.kind);
++        if expr.ty.is_never() && crate::verus::is_erased_expr_kind(&this.thir, &expr.kind) {
++            let constant = ConstOperand {
++                span: expr.span,
++                user_ty: None,
++                const_: Const::Val(ConstValue::ZeroSized, expr.ty),
++            };
++            return block.and(Operand::Constant(Box::new(constant)));
++        }
+         match category {
+             Category::Constant
+                 if matches!(needs_temporary, NeedsTemporary::No)
+diff --git a/source/rustc_mir_build/src/builder/expr/stmt.rs b/source/rustc_mir_build/src/builder/expr/stmt.rs
+index 66ee139..9b0e12a 100644
+--- a/source/rustc_mir_build/src/builder/expr/stmt.rs
++++ b/source/rustc_mir_build/src/builder/expr/stmt.rs
+@@ -24,6 +24,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+         let source_info = this.source_info(expr.span);
+         // Handle a number of expressions that don't need a destination at all. This
+         // avoids needing a mountain of temporary `()` variables.
++        if expr.ty.is_never() && crate::verus::is_erased_expr_kind(&this.thir, &expr.kind) {
++            return block.unit();
++        }
+         match expr.kind {
+             ExprKind::Scope { region_scope, lint_level, value } => {
+                 this.in_scope((region_scope, source_info), lint_level, |this| {
+diff --git a/source/rustc_mir_build/src/builder/matches/mod.rs b/source/rustc_mir_build/src/builder/matches/mod.rs
+index 8f17f19..82db60b 100644
+--- a/source/rustc_mir_build/src/builder/matches/mod.rs
++++ b/source/rustc_mir_build/src/builder/matches/mod.rs
+@@ -573,6 +573,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+         irrefutable_pat: &Pat<'tcx>,
+         initializer_id: ExprId,
+     ) -> BlockAnd<()> {
++        let initializer = &self.thir[initializer_id];
++        if initializer.ty.is_never()
++            && crate::verus::is_erased_expr_kind(&self.thir, &initializer.kind)
++        {
++            return block.unit();
++        }
+         match irrefutable_pat.kind {
+             // Optimize the case of `let x = ...` to write directly into `x`
+             PatKind::Binding { mode: BindingMode(ByRef::No, _), var, subpattern: None, .. } => {
+@@ -654,7 +660,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+             }
+ 
+             _ => {
+-                let initializer = &self.thir[initializer_id];
+                 let place_builder =
+                     unpack!(block = self.lower_scrutinee(block, initializer_id, initializer.span));
+                 self.place_into_pattern(block, irrefutable_pat, place_builder, true)
+@@ -2429,6 +2434,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+         declare_let_bindings: DeclareLetBindings,
+     ) -> BlockAnd<()> {
+         let expr_span = self.thir[expr_id].span;
++        if self.thir[expr_id].ty.is_never()
++            && crate::verus::is_erased_expr_kind(&self.thir, &self.thir[expr_id].kind)
++        {
++            return block.unit();
++        }
+         let scrutinee = unpack!(block = self.lower_scrutinee(block, expr_id, expr_span));
+         let built_tree = self.lower_match_tree(
+             block,
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..ce94cab 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -513,6 +513,25 @@ pub(crate) fn is_erased<'tcx>(
+     }
+ }
+ 
++pub(crate) fn is_erased_expr_kind<'tcx>(
++    thir: &thir::Thir<'tcx>,
++    expr_kind: &rustc_middle::thir::ExprKind<'tcx>,
++) -> bool {
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++    match expr_kind {
++        ExprKind::Call { fun, args: _, .. } => match thir.exprs[*fun].ty.kind() {
++            TyKind::FnDef(fn_def_id, _) => *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id,
++            _ => false,
++        },
++        ExprKind::Scope { region_scope: _, lint_level: _, value } => {
++            is_erased_expr_kind(thir, &thir.exprs[*value].kind)
++        }
++        _ => false,
++    }
++}
++
+ /// Given an expression like `&x`, `*x` or `x.field`, determine if it should be erased
+ /// by looking at if `x` is erased.
+ pub(crate) fn is_node_with_single_arg_erased<'tcx>(

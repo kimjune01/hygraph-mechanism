@@ -1,0 +1,152 @@
+diff --git a/source/rustc_mir_build/src/builder/expr/as_temp.rs b/source/rustc_mir_build/src/builder/expr/as_temp.rs
+index d8ac19e..7e5acb8 100644
+--- a/source/rustc_mir_build/src/builder/expr/as_temp.rs
++++ b/source/rustc_mir_build/src/builder/expr/as_temp.rs
+@@ -46,6 +46,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+         }
+ 
+         let expr_ty = expr.ty;
++        let erased_ghost_tuple_arg =
++            crate::verus::erased_ghost_value_tuple_arg_for_never(this.thir, expr_id);
+         let deduplicate_temps = this.fixed_temps_scope.is_some()
+             && this.fixed_temps_scope == temp_lifetime.temp_lifetime;
+         let temp = if deduplicate_temps && let Some(temp_index) = this.fixed_temps.get(&expr_id) {
+@@ -123,6 +125,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+             }
+         }
+ 
++        if let Some(tuple_arg) = erased_ghost_tuple_arg {
++            unpack!(
++                block = this.as_temp(block, temp_lifetime, tuple_arg, Mutability::Mut)
++            );
++            return block.and(temp);
++        }
++
+         block = this.expr_into_dest(temp_place, block, expr_id).into_block();
+ 
+         if let Some(temp_lifetime) = temp_lifetime.temp_lifetime {
+diff --git a/source/rustc_mir_build/src/builder/expr/into.rs b/source/rustc_mir_build/src/builder/expr/into.rs
+index f595cfc..872ad79 100644
+--- a/source/rustc_mir_build/src/builder/expr/into.rs
++++ b/source/rustc_mir_build/src/builder/expr/into.rs
+@@ -137,22 +137,40 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 let source_expr = &this.thir[source];
+                 let is_call =
+                     matches!(source_expr.kind, ExprKind::Call { .. } | ExprKind::InlineAsm { .. });
++                let erased_ghost_tuple_arg =
++                    crate::verus::erased_ghost_value_tuple_arg_for_never(this.thir, source);
+ 
+                 // (#66975) Source could be a const of type `!`, so has to
+                 // exist in the generated MIR.
+-                unpack!(
+-                    block =
+-                        this.as_temp(block, this.local_temp_lifetime(), source, Mutability::Mut)
+-                );
+-
+-                // This is an optimization. If the expression was a call then we already have an
+-                // unreachable block. Don't bother to terminate it and create a new one.
+-                if is_call {
++                if let Some(tuple_arg) = erased_ghost_tuple_arg {
++                    unpack!(
++                        block = this.as_temp(
++                            block,
++                            this.local_temp_lifetime(),
++                            tuple_arg,
++                            Mutability::Mut
++                        )
++                    );
+                     block.unit()
+                 } else {
+-                    this.cfg.terminate(block, source_info, TerminatorKind::Unreachable);
+-                    let end_block = this.cfg.start_new_block();
+-                    end_block.unit()
++                    unpack!(
++                        block = this.as_temp(
++                            block,
++                            this.local_temp_lifetime(),
++                            source,
++                            Mutability::Mut
++                        )
++                    );
++
++                    // This is an optimization. If the expression was a call then we already have an
++                    // unreachable block. Don't bother to terminate it and create a new one.
++                    if is_call {
++                        block.unit()
++                    } else {
++                        this.cfg.terminate(block, source_info, TerminatorKind::Unreachable);
++                        let end_block = this.cfg.start_new_block();
++                        end_block.unit()
++                    }
+                 }
+             }
+             ExprKind::LogicalOp { op, lhs, rhs } => {
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..37a7825 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -513,6 +513,30 @@ pub(crate) fn is_erased<'tcx>(
+     }
+ }
+ 
++/// If this is a Verus-erased ghost value of type `!`, return the tuple argument
++/// that carries the subexpressions kept for Rust's checks.
++pub(crate) fn erased_ghost_value_tuple_arg_for_never<'tcx>(
++    thir: &thir::Thir<'tcx>,
++    expr_id: ExprId,
++) -> Option<ExprId> {
++    let erasure_ctxt = get_verus_erasure_ctxt_option()?;
++    let expr = &thir.exprs[expr_id];
++    match &expr.kind {
++        ExprKind::Call { fun, args, .. } if expr.ty.is_never() => {
++            match thir.exprs[*fun].ty.kind() {
++                TyKind::FnDef(fn_def_id, _)
++                    if *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id =>
++                {
++                    Some(args[0])
++                }
++                _ => None,
++            }
++        }
++        ExprKind::Scope { value, .. } => erased_ghost_value_tuple_arg_for_never(thir, *value),
++        _ => None,
++    }
++}
++
+ /// Given an expression like `&x`, `*x` or `x.field`, determine if it should be erased
+ /// by looking at if `x` is erased.
+ pub(crate) fn is_node_with_single_arg_erased<'tcx>(
+diff --git a/source/rustc_mir_build_additional_files/verus_expr.rs b/source/rustc_mir_build_additional_files/verus_expr.rs
+index 9a59164..4f58bed 100644
+--- a/source/rustc_mir_build_additional_files/verus_expr.rs
++++ b/source/rustc_mir_build_additional_files/verus_expr.rs
+@@ -1,8 +1,8 @@
+ use crate::thir::cx::ThirBuildCx;
+ use crate::verus::CallErasure;
+ use crate::verus::{
+-    erase_node, erase_node_unadjusted, erase_tree_kind, erased_ghost_value, handle_call,
+-    is_node_with_single_arg_erased,
++    erase_node, erase_node_unadjusted, erase_tree_kind, erased_ghost_value,
++    erased_ghost_value_tuple_arg_for_never, handle_call, is_node_with_single_arg_erased,
+ };
+ use rustc_hir::{Expr, ExprKind, UnOp};
+ use rustc_middle::ty::adjustment::{Adjust, Adjustment, AutoBorrow};
+@@ -87,7 +87,17 @@ pub(crate) fn mirror_expr_post<'tcx>(
+     let kind = match expr.kind {
+         ExprKind::MethodCall(..) | ExprKind::Call(..) | ExprKind::Struct(..) => {
+             let call_erasure = handle_call(&cx.verus_ctxt, expr);
+-            if call_erasure.should_erase() { erase_node_unadjusted(cx, expr, kind) } else { kind }
++            let has_erased_never_arg = match &kind {
++                rustc_middle::thir::ExprKind::Call { args, .. } => args
++                    .iter()
++                    .any(|arg| erased_ghost_value_tuple_arg_for_never(&cx.thir, *arg).is_some()),
++                _ => false,
++            };
++            if call_erasure.should_erase() || has_erased_never_arg {
++                erase_node_unadjusted(cx, expr, kind)
++            } else {
++                kind
++            }
+         }
+         ExprKind::Field(..) | ExprKind::AddrOf(..) => {
+             if is_node_with_single_arg_erased(cx, &erasure_ctxt, &kind) {

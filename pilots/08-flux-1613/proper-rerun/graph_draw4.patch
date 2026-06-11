@@ -1,0 +1,38 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0..4917797 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -141,6 +141,20 @@ impl<'a> TypeEnv<'a> {
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+         if result.is_strg && mutbl == Mutability::Mut {
+             Ok(Ty::ptr(PtrKind::Mut(re), result.path()))
++        } else if mutbl == Mutability::Mut
++            && place
++                .projection
++                .iter()
++                .any(|elem| matches!(elem, PlaceElem::Field(_)))
++        {
++            let t1 = result.ty.clone();
++            let t2 = t1.with_holes().replace_holes(|sorts, kind| {
++                debug_assert_eq!(kind, HoleKind::Pred);
++                infcx.fresh_kvar(sorts, KVarEncoding::Conj)
++            });
++            infcx.subtyping(&t1, &t2, ConstrReason::Other)?;
++            result.block_with(t2.clone());
++            Ok(Ty::mk_ref(re, t2, Mutability::Mut))
+         } else {
+             // FIXME(nilehmann) we should block the place here. That would require a notion
+             // of shared vs mutable block types because sometimes blocked places from a shared
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789..846e854 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -137,6 +137,8 @@ impl PlacesTree {
+                     if let TyKind::Ptr(_, path) = ty.kind() {
+                         cursor.change_root(path);
+                         ty = self.get_loc(&cursor.loc).ty.clone();
++                    } else if let Ref!(_, deref_ty, _) = ty.kind() {
++                        ty = deref_ty.clone();
+                     } else {
+                         return;
+                     }

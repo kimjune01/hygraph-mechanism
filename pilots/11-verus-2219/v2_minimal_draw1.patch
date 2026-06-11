@@ -1,0 +1,44 @@
+diff --git a/source/rustc_mir_build/src/builder/expr/into.rs b/source/rustc_mir_build/src/builder/expr/into.rs
+index f595cfc..8ef3eed 100644
+--- a/source/rustc_mir_build/src/builder/expr/into.rs
++++ b/source/rustc_mir_build/src/builder/expr/into.rs
+@@ -147,7 +147,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+                 // This is an optimization. If the expression was a call then we already have an
+                 // unreachable block. Don't bother to terminate it and create a new one.
+-                if is_call {
++                //
++                // Verus also needs to preserve the successor edge while running its ghost
++                // lifetime/borrow-checking transform. Ghost construction or use of a `!` value is
++                // erased for execution, so Rust's normal "code after `!` is unreachable" CFG would
++                // hide later tracked/linear moves from borrowck.
++                if is_call || crate::verus::preserve_cfg_after_never_to_any(this.tcx, this.def_id) {
+                     block.unit()
+                 } else {
+                     this.cfg.terminate(block, source_info, TerminatorKind::Unreachable);
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..5ee7281 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -203,6 +203,21 @@ impl VerusThirBuildCtxt {
+     }
+ }
+ 
++pub(crate) fn preserve_cfg_after_never_to_any<'tcx>(
++    tcx: TyCtxt<'tcx>,
++    local_def_id: LocalDefId,
++) -> bool {
++    let fn_local_def_id = enclosing_fn_local_def_id(tcx, local_def_id);
++    let Some(verus_aware_def_ids) = VERUS_AWARE_DEF_IDS.read().unwrap().clone() else {
++        return false;
++    };
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++
++    verus_aware_def_ids.contains(&fn_local_def_id) && erasure_ctxt.new_mut_ref
++}
++
+ fn enclosing_fn_local_def_id<'tcx>(tcx: TyCtxt<'tcx>, local_def_id: LocalDefId) -> LocalDefId {
+     if tcx.is_closure_like(local_def_id.into()) {
+         let hir_id = tcx.local_def_id_to_hir_id(local_def_id);

@@ -1,0 +1,54 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..de07fd2 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,11 +845,20 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref mut target, ref func, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+ 
++            let is_verus_erased_ghost_value = match func {
++                Operand::Constant(constant) => match constant.const_.ty().kind() {
++                    ty::FnDef(fn_def_id, _) => crate::verus::is_erased_ghost_value(*fn_def_id),
++                    _ => false,
++                },
++                _ => false,
++            };
++
+             let ty = destination.ty(&self.local_decls, self.tcx).ty;
+             let ty_is_inhabited = ty.is_inhabited_from(
+                 self.tcx,
+@@ -876,7 +885,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     true
+                 };
+ 
+-            if !ty_is_inhabited {
++            if !ty_is_inhabited && !is_verus_erased_ghost_value {
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..049978b 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -613,6 +613,14 @@ pub(crate) fn erase_body<'tcx>(cx: &mut ThirBuildCx<'tcx>, local_def_id: LocalDe
+     matches!(erasure_ctxt.bodies.get(&local_def_id), Some(BodyErasure { erase_body: true, .. }))
+ }
+ 
++pub(crate) fn is_erased_ghost_value(def_id: DefId) -> bool {
++    let erasure_ctxt = VERUS_ERASURE_CTXT.read().unwrap();
++    let Some(erasure_ctxt) = erasure_ctxt.as_ref() else {
++        return false;
++    };
++    def_id == erasure_ctxt.erased_ghost_value_fn_def_id
++}
++
+ pub(crate) fn erase_closure_body_for_closure_captures<'tcx>(local_def_id: LocalDefId) -> bool {
+     let erasure_ctxt = get_verus_erasure_ctxt();
+     matches!(erasure_ctxt.bodies.get(&local_def_id), Some(BodyErasure { erase_body: true, .. }))

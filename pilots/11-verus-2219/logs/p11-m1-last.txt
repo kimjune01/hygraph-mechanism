@@ -1,0 +1,31 @@
+VERDICT: reported program now correctly REJECTED.
+
+Reported-program output:
+```text
+error[E0382]: use of moved value: `t`
+...
+error: aborting due to 1 previous error
+```
+
+Regression suite:
+```text
+vargo test -p rust_verify_test --test lifetime
+test result: ok. 94 passed; 0 failed
+```
+
+Changed source:
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+  - added local helper `is_verus_erased_ghost_value_call`
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - added `is_erased_ghost_value_fn_def_id`
+
+Root cause / fix:
+Verus represents erased ghost/spec values during lifetime checking with synthetic `erased_ghost_value` calls. When such a synthetic call has return type `!`, rustc’s MIR builder treated it like a real divergent call and removed the normal return edge in `lint_and_remove_uninhabited`, making following tracked-resource uses unreachable to borrow checking. The fix preserves the successor edge only for Verus’s synthetic `erased_ghost_value` calls, while leaving normal uninhabited-return calls unchanged.
+
+`git -C /Users/junekim/Documents/verus-p11 diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs        | 18 +++++++++++++++++-
+ source/rustc_mir_build_additional_files/verus.rs |  4 ++++
+ 2 files changed, 21 insertions(+), 1 deletion(-)
+```

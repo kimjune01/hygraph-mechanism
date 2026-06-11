@@ -1,0 +1,9 @@
+draw   arm      T1      T2      T3      verdict
+1      graph    VERIFY  VERIFY  E0999   DIVERGE-shape_general+sound
+1      minimal  VERIFY  VERIFY  E0999   general+sound
+2      graph    VERIFY  VERIFY  E0999   general+sound
+2      minimal  VERIFY  E0999   E0999   OVER-NARROW(T2fail)
+3      graph    VERIFY  VERIFY  E0999   general+sound
+3      minimal  VERIFY  VERIFY  E0999   general+sound
+4      graph    VERIFY  VERIFY  E0999   general+sound
+4      minimal  VERIFY  VERIFY  E0999   general+sound

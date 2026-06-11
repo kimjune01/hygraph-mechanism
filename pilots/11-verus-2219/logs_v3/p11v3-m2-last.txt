@@ -1,0 +1,26 @@
+VERDICT: reported program is now correctly REJECTED with `error[E0382]: use of moved value: t`. Regression suite passed: `test result: ok. 94 passed; 0 failed`.
+
+Changed source files/functions:
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - added `erased_ghost_value_tuple_arg_for_never`
+- `source/rustc_mir_build_additional_files/verus_expr.rs`
+  - updated `mirror_expr_post`
+- `source/rustc_mir_build/src/builder/expr/as_temp.rs`
+  - updated `Builder::as_temp_inner`
+- `source/rustc_mir_build/src/builder/expr/into.rs`
+  - updated `Builder::expr_into_dest` handling for `ExprKind::NeverToAny`
+
+Root cause/fix: Verus erases ghost/spec expressions into a synthetic `erased_ghost_value` call. When that synthetic value had type `!`, Rust MIR lowering treated it like a real diverging never expression, making subsequent code unreachable for Rust borrow/linearity analysis. The fix recognizes Verus-erased ghost values of type `!` and lowers only their tuple of preserved check expressions instead of materializing a fake diverging `!` call. For kept calls whose arguments include such a synthetic never value, Verus erases the call node while preserving argument checks, avoiding impossible `!` operands without weakening tracked move checking.
+
+Additional adversarial checks:
+- `/tmp/p11m-scratch/issue2219_bad_variants.rs`: rejected both call-argument and `let _: !` double-consume variants with moved-value errors.
+- `/tmp/p11m-scratch/issue2219_valid.rs`: verified valid single-consume variants, `verification results:: 4 verified, 0 errors`.
+
+`git -C /Users/junekim/Documents/verus-p11 diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/expr/as_temp.rs |  9 +++++
+ source/rustc_mir_build/src/builder/expr/into.rs    | 40 ++++++++++++++++------
+ source/rustc_mir_build_additional_files/verus.rs   | 24 +++++++++++++
+ .../rustc_mir_build_additional_files/verus_expr.rs | 16 +++++++--
+ 4 files changed, 75 insertions(+), 14 deletions(-)
+```

@@ -1,0 +1,35 @@
+VERDICT: reported program now correctly REJECTED.
+
+Changed:
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - Added `is_erased_ghost_value_func`
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - Updated `Builder::lint_and_remove_uninhabited`
+
+Root cause/fix:
+Verus erases ghost/spec expressions into synthetic `erased_ghost_value<S, T>(...)` calls while preserving `T`. When `T` is uninhabited, especially `!`, rustc MIR cleanup in `lint_and_remove_uninhabited` removed the call’s normal return edge. That made post-ghost statements invisible to control-flow-sensitive borrow/linearity checking. The fix preserves the return edge only for Verus’s synthetic `erased_ghost_value` calls, while leaving real uninhabited/diverging calls unchanged.
+
+Perturbation results:
+- `reported.rs`: REJECTED, `E0382 use of moved value: t`
+- `variant_let_never.rs`: REJECTED, `E0382 use of moved value: t`
+- `variant_block_never.rs`: REJECTED, `E0382 use of moved value: t`
+- `variant_spec_never_call.rs`: REJECTED, `E0382 use of moved value: t`
+- `variant_valid_single_consume.rs`: VERIFIED, `3 verified, 0 errors`
+- `variant_unreachable_no_use.rs`: VERIFIED, `2 verified, 0 errors`
+- `variant_real_loop_exec.rs`: VERIFIED, `4 verified, 0 errors`, with expected unreachable-code warning
+- Empty enum probes: killed before relevant path by Verus datatype/external-type restrictions, not counted.
+
+Regression:
+- `vargo test -p rust_verify_test --test lifetime`: PASS
+- Result: `94 passed; 0 failed`
+- vstd rebuild: `1490 verified, 0 errors`
+
+Hypothesis graph:
+- `/tmp/p11g-scratch/HYPOTHESIS_GRAPH.md`
+
+`git diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs        |  7 ++++++-
+ source/rustc_mir_build_additional_files/verus.rs | 17 ++++++++++++++++-
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+```

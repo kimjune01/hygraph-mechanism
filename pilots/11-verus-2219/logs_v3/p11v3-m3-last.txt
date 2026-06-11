@@ -1,0 +1,28 @@
+VERDICT: reported program is now correctly REJECTED with `error[E0382]: use of moved value: t`.
+
+Regression suite: `vargo test -p rust_verify_test --test lifetime` PASSED: `94 passed; 0 failed`.
+
+Changed source:
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - added `is_erased_ghost_value_call`
+  - added erased-placeholder argument helpers for `NeverToAny`
+- `source/rustc_mir_build_additional_files/verus_expr.rs`
+  - `apply_adjustment_post`
+
+Root cause/fix: Rust MIR construction removes return edges for calls whose destination type is uninhabited, including Verus’s erased ghost placeholder calls returning `!` or another uninhabited type. That made later proof/tracked code unreachable to borrow checking, so tracked resources could be consumed twice. The fix preserves CFG return edges specifically for Verus `erased_ghost_value` calls, while leaving normal Rust uninhabited-call pruning intact. It also neutralizes `NeverToAny` around erased placeholders so erased ghost coercions do not introduce unreachable control flow.
+
+Adversarial checks:
+- Original `/tmp/p11m-scratch/issue2219.rs`: REJECTED, `E0382 use of moved value`.
+- `let _n: ! = arbitrary(); consume(t); consume(t);`: REJECTED, `E0382`.
+- Uninhabited struct `{ n: ! }` ghost use before double consume: REJECTED, `E0382`.
+- Single-consume valid variants: VERIFIED, `0 errors`.
+
+`git -C /Users/junekim/Documents/verus-p11 diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs          |  5 +-
+ source/rustc_mir_build_additional_files/verus.rs   | 56 ++++++++++++++++++++++
+ .../rustc_mir_build_additional_files/verus_expr.rs | 17 ++++++-
+ 3 files changed, 74 insertions(+), 4 deletions(-)
+```
