@@ -1,0 +1,76 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..4c3d8d5842 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -19,9 +19,9 @@ use flux_middle::{
+     pretty::{PrettyCx, PrettyNested},
+     queries::QueryResult,
+     rty::{
+-        BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FnSig, GenericArg, HoleKind,
+-        INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, SortCtor, SubsetTy, Ty,
+-        TyKind, VariantIdx,
++        BaseTy, Binder, BoundReftKind, Ctor, Ensures, Expr, ExprKind, FieldProj, FnSig, GenericArg,
++        HoleKind, INNERMOST, InferMode, Lambda, List, Loc, Mutability, Path, PtrKind, Region,
++        SortCtor, SubsetTy, Ty, TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+         region_matching::{rty_match_regions, ty_match_regions},
+@@ -231,7 +231,12 @@ impl<'a> TypeEnv<'a> {
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+         for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            // Weaken the bound by replacing abstract refinement (function-sorted) index
++            // fields with fresh Horn-clause variables.  This lets abstract refinements
++            // change freely – which is the whole point of `hdl` fields – while concrete
++            // (integer, bool, …) fields are still required to equal those in `bound`.
++            let weakened = weaken_abstract_fields(infcx.infcx, &bound);
++            infcx.subtyping(&ty, &weakened, ConstrReason::FoldLocal)?;
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+@@ -912,6 +917,44 @@ enum LocInfo {
+     Var(String),
+ }
+ 
++/// Replace abstract-refinement (function-sorted) index fields of an indexed ADT type
++/// with fresh Horn-clause variables so that `fold_local_ptrs` does not enforce
++/// equality of those fields against the original bound.
++///
++/// Concretely: given `Slot[s.slot]` where `Slot` has sort `(len: int, get: int -> bool)`,
++/// this returns `Slot[s.slot.len, $k]` where `$k` is a fresh kvar of sort `int -> bool`.
++/// The subtyping check then only constrains `len` (a concrete field) to equal `s.slot.len`,
++/// while `get` (an abstract field) is left free to take any value.
++fn weaken_abstract_fields(infcx: &flux_infer::infer::InferCtxt<'_, '_, '_>, ty: &Ty) -> Ty {
++    if let TyKind::Indexed(BaseTy::Adt(adt_def, generic_args), idx) = ty.kind() {
++        let sort = adt_def.sort_def().to_sort(generic_args);
++        if let Some(field_sorts) = sort.field_sorts() {
++            if field_sorts.iter().any(|s| matches!(s, Sort::Func(_))) {
++                let def_id = adt_def.sort_def().did();
++                let new_fields: List<Expr> = field_sorts
++                    .iter()
++                    .enumerate()
++                    .map(|(i, field_sort)| {
++                        if matches!(field_sort, Sort::Func(_)) {
++                            // Fresh kvar: the abstract refinement may change freely.
++                            infcx.fresh_infer_var(field_sort, InferMode::KVar)
++                        } else {
++                            // Concrete field: project out of the original index.
++                            idx.proj_and_reduce(FieldProj::Adt { def_id, field: i as u32 })
++                        }
++                    })
++                    .collect();
++                let new_idx = Expr::ctor_struct(def_id, new_fields);
++                return Ty::indexed(
++                    BaseTy::Adt(adt_def.clone(), generic_args.clone()),
++                    new_idx,
++                );
++            }
++        }
++    }
++    ty.clone()
++}
++
+ fn loc_info(loc: &Loc) -> LocInfo {
+     match loc {
+         Loc::Local(local) => LocInfo::Local(format!("{local:?}")),

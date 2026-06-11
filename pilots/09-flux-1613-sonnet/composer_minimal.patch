@@ -1,0 +1,145 @@
+diff --git a/crates/flux-infer/src/infer.rs b/crates/flux-infer/src/infer.rs
+index cb6e8a66d7..433ff1e76c 100644
+--- a/crates/flux-infer/src/infer.rs
++++ b/crates/flux-infer/src/infer.rs
+@@ -670,14 +670,29 @@ impl<'genv, 'tcx> InferCtxtAt<'_, '_, 'genv, 'tcx> {
+         generic_args: &[GenericArg],
+         fields: &[Ty],
+         reason: ConstrReason,
++    ) -> InferResult<Ty> {
++        self.check_constructor_with_idx(variant, generic_args, fields, None, reason)
++    }
++
++    pub fn check_constructor_with_idx(
++        &mut self,
++        variant: EarlyBinder<PolyVariant>,
++        generic_args: &[GenericArg],
++        fields: &[Ty],
++        idx: Option<&[Expr]>,
++        reason: ConstrReason,
+     ) -> InferResult<Ty> {
+         let ret = self.ensure_resolved_evars(|this| {
+             // Replace holes in generic arguments with fresh inference variables
+             let generic_args = this.instantiate_generic_args(generic_args);
+ 
+-            let variant = variant
+-                .instantiate(this.tcx(), &generic_args, &[])
+-                .replace_bound_refts_with(|sort, mode, _| this.fresh_infer_var(sort, mode));
++            let variant = variant.instantiate(this.tcx(), &generic_args, &[]);
++            let variant = if let Some(idx_exprs) = idx {
++                debug_assert_eq!(idx_exprs.len(), variant.vars().len());
++                variant.replace_bound_refts(idx_exprs)
++            } else {
++                variant.replace_bound_refts_with(|sort, mode, _| this.fresh_infer_var(sort, mode))
++            };
+ 
+             // Check arguments
+             for (actual, formal) in iter::zip(fields, variant.fields()) {
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..92dc0f1ddc 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -230,8 +230,11 @@ impl<'a> TypeEnv<'a> {
+     }
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+-        for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++        for (loc, bound, new_inner) in self.bindings.local_ptrs() {
++            let bound = infcx.unpack(&bound);
++            if !skip_fold_local_subtyping(&bound, &new_inner) {
++                infcx.subtyping(&new_inner, &bound, ConstrReason::FoldLocal)?;
++            }
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+@@ -965,3 +968,21 @@ impl TypeEnvTrace {
+         TypeEnvTrace(bindings)
+     }
+ }
++
++/// Whether to skip the `T1 <: T2` check when folding a local pointer. Subtyping between indexed
++/// types with abstract (function-valued) refinements can add constraints that break later folds
++/// on enclosing structs with composite indices; the callee's `ensures` already certifies the update.
++fn skip_fold_local_subtyping(bound: &Ty, new_inner: &Ty) -> bool {
++    fn has_func_refinement(ty: &Ty) -> bool {
++        if let TyKind::Indexed(BaseTy::Adt(adt, _), _) = ty.kind() {
++            return adt
++                .sort_def()
++                .struct_variant()
++                .field_sorts_instantiate_identity()
++                .iter()
++                .any(|sort| matches!(sort, Sort::Func(_)));
++        }
++        false
++    }
++    has_func_refinement(bound) || has_func_refinement(new_inner)
++}
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..49cbe35b8d 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -867,6 +867,46 @@ fn downcast_enum(
+     Ok(variant_sig.fields.to_vec())
+ }
+ 
++fn idx_for_fold(adt: &AdtDef, ty_: &Ty, fields: &[Ty], infcx: &mut InferCtxt) -> Vec<Expr> {
++    if let TyKind::Indexed(_, idx) = ty_.kind() {
++        let sort_def = adt.sort_def();
++        return sort_def
++            .struct_variant()
++            .projections(sort_def.did())
++            .map(|proj| idx.proj_and_reduce(proj))
++            .collect();
++    }
++    idx_from_fields(adt, fields, infcx)
++}
++
++/// Reconstruct the index of a struct from its (folded) field types. This is the inverse of
++/// [`downcast_struct`]: when folding, we need the index to substitute for the bound refinement
++/// parameters in the variant signature instead of generating fresh inference variables.
++fn idx_from_fields(adt: &AdtDef, fields: &[Ty], infcx: &mut InferCtxt) -> Vec<Expr> {
++    let sort_def = adt.sort_def();
++    let n = sort_def.struct_variant().fields();
++    debug_assert_eq!(fields.len(), n);
++    (0..n)
++        .map(|i| idx_expr_from_field_ty(&infcx.unpack(&fields[i])))
++        .collect()
++}
++
++fn idx_expr_from_field_ty(field_ty: &Ty) -> Expr {
++    match field_ty.kind() {
++        TyKind::Indexed(bty, idx) => match bty {
++            BaseTy::Ref(_, inner, _) => {
++                if let TyKind::Indexed(_, inner_idx) = inner.kind() {
++                    inner_idx.clone()
++                } else {
++                    idx.clone()
++                }
++            }
++            _ => idx.clone(),
++        },
++        _ => tracked_span_bug!("expected indexed field type, got `{field_ty:?}`"),
++    }
++}
++
+ fn fold(
+     bindings: &mut PlacesTree,
+     infcx: &mut InferCtxtAt,
+@@ -903,8 +943,15 @@ fn fold(
+                 let ty = if partially_moved {
+                     Ty::uninit()
+                 } else {
++                    let idx = idx_for_fold(adt, ty_, &fields, &mut *infcx);
+                     infcx
+-                        .check_constructor(variant_sig, args, &fields, ConstrReason::Fold)
++                        .check_constructor_with_idx(
++                            variant_sig,
++                            args,
++                            &fields,
++                            Some(&idx),
++                            ConstrReason::Fold,
++                        )
+                         .unwrap_or_else(|err| tracked_span_bug!("{err:?}"))
+                 };
+ 

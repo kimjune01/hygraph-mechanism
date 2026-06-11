@@ -1,0 +1,94 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..bca3946d8d 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -231,7 +231,17 @@ impl<'a> TypeEnv<'a> {
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+         for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            // Try to write the updated type back into any `&mut <bound>` field still present in
++            // the bindings (e.g. a Downcast field of a parent struct).  When that succeeds the
++            // subsequent struct-fold will re-check the invariant with the correct, updated type,
++            // so no subtyping constraint is needed here.
++            //
++            // If no matching `&mut <bound>` is found (e.g. the reference was already moved /
++            // consumed, or this is the `compare_fn_sigs` path with an empty env) we fall back to
++            // the original `T_new <: T_old` check so that existing behaviour is preserved.
++            if !self.bindings.replace_mut_ref(&bound, &ty) {
++                infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            }
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..7ee1868658 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -11,7 +11,7 @@ use flux_middle::{
+     rty::{
+         AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt, List,
+         Loc, Mutability, Path, PtrKind, Ref, Sort, Ty, TyKind, VariantIdx, VariantSig,
+-        fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
++        fold::{FallibleTypeFolder, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitable, TypeVisitor},
+     },
+ };
+ use flux_rustc_bridge::mir::{FieldIdx, Place, PlaceElem};
+@@ -305,6 +305,30 @@ impl PlacesTree {
+             .collect()
+     }
+ 
++    /// Walk every `Downcast` binding in the tree and replace `&mut <target>` (found at any depth
++    /// inside that binding) with `&mut <replacement>`.  Returns `true` if at least one replacement
++    /// was made.
++    ///
++    /// The search is intentionally restricted to **`Downcast` bindings** (i.e. unfolded struct
++    /// fields).  For those, the subsequent struct `fold` will re-check the struct invariant using
++    /// the updated field type, so no extra subtyping constraint is needed here.  For direct `&mut T`
++    /// bindings (function parameters, temporaries) the original `T_new <: T_old` subtyping check
++    /// is the only guard, so we must *not* skip it.
++    ///
++    /// This is used by [`TypeEnv::fold_local_ptrs`] to write the updated type of a local pointer
++    /// created by `unfold_local_ptrs` back into the parent struct field that originally supplied
++    /// the `&mut` reference, thereby propagating the mutation effect to the struct without
++    /// generating an unprovable equality constraint on abstract function components.
++    pub(crate) fn replace_mut_ref(&mut self, target: &Ty, replacement: &Ty) -> bool {
++        let mut replacer = MutRefReplacer { target, replacement, replaced: false };
++        for (_, binding) in self.map.iter_mut() {
++            if matches!(binding.ty.kind(), TyKind::Downcast(..)) {
++                binding.ty = binding.ty.fold_with(&mut replacer);
++            }
++        }
++        replacer.replaced
++    }
++
+     fn remove(&mut self, loc: &Loc) -> Binding {
+         self.map
+             .shift_remove(loc)
+@@ -929,6 +953,26 @@ fn fold(
+     }
+ }
+ 
++/// A [`TypeFolder`] that replaces every occurrence of `&mut <target>` with `&mut <replacement>`
++/// at any depth in a type.  Used by [`PlacesTree::replace_mut_ref`].
++struct MutRefReplacer<'a> {
++    target: &'a Ty,
++    replacement: &'a Ty,
++    replaced: bool,
++}
++
++impl TypeFolder for MutRefReplacer<'_> {
++    fn fold_ty(&mut self, ty: &Ty) -> Ty {
++        if let TyKind::Indexed(BaseTy::Ref(re, inner, Mutability::Mut), _) = ty.kind() {
++            if inner == self.target {
++                self.replaced = true;
++                return Ty::mk_ref(*re, self.replacement.clone(), Mutability::Mut);
++            }
++        }
++        ty.super_fold_with(self)
++    }
++}
++
+ mod pretty {
+ 
+     use flux_middle::pretty::*;

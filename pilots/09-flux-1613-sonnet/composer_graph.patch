@@ -1,0 +1,76 @@
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..e658d42acf 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -392,7 +392,10 @@ impl<'a> TypeEnv<'a> {
+                 Ensures::Type(path, updated_ty) => {
+                     let updated_ty = infcx.unpack(updated_ty);
+                     infcx.assume_invariants(&updated_ty);
+-                    self.update_path(path, updated_ty, span);
++                    self.update_path(path, updated_ty.clone(), span);
++                    if path.projection().is_empty() {
++                        self.bindings.update_local_ptr_bound(&path.loc, &updated_ty);
++                    }
+                 }
+                 Ensures::Pred(e) => infcx.assume_pred(e),
+             }
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..5fd7e8e9d1 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -292,6 +292,19 @@ impl PlacesTree {
+         self.map.shift_remove(loc);
+     }
+ 
++    /// When a callee `ensures` updates a location introduced by [`unfold_local_ptr`], the
++    /// stored `LocalPtr` bound (the inner type of the original `&mut`) is stale. Refresh it
++    /// by taking non-function index components from the original bound and function components
++    /// from the post-call type so [`TypeEnv::fold_local_ptrs`] can still check invariants.
++    pub(crate) fn update_local_ptr_bound(&mut self, loc: &Loc, ty: &Ty) {
++        if let Some(binding) = self.map.get_mut(loc)
++            && let LocKind::LocalPtr(bound) = &binding.kind
++        {
++            let merged = merge_local_ptr_bound(bound, ty);
++            binding.kind = LocKind::LocalPtr(merged);
++        }
++    }
++
+     pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Ty)> {
+         self.map
+             .iter()
+@@ -867,6 +880,35 @@ fn downcast_enum(
+     Ok(variant_sig.fields.to_vec())
+ }
+ 
++fn merge_local_ptr_bound(bound: &Ty, ty: &Ty) -> Ty {
++    let TyKind::Indexed(bty_b, idx_b) = bound.kind() else {
++        return ty.clone();
++    };
++    let TyKind::Indexed(bty_t, idx_t) = ty.kind() else {
++        return bound.clone();
++    };
++    if bty_b != bty_t {
++        return ty.clone();
++    }
++    let BaseTy::Adt(adt, _) = bty_b else {
++        return ty.clone();
++    };
++    let sort_def = adt.sort_def();
++    let field_sorts = sort_def.struct_variant().field_sorts_instantiate_identity();
++    let did = adt.did();
++    let projs: Vec<_> = sort_def.struct_variant().projections(did).collect();
++    let merged_flds = field_sorts
++        .iter()
++        .enumerate()
++        .map(|(i, sort)| {
++            let b = idx_b.proj_and_reduce(projs[i]);
++            let t = idx_t.proj_and_reduce(projs[i]);
++            if matches!(sort, Sort::Func(_)) { t } else { b }
++        })
++        .collect_vec();
++    Ty::indexed(bty_b.clone(), Expr::ctor_struct(did, merged_flds.into()))
++}
++
+ fn fold(
+     bindings: &mut PlacesTree,
+     infcx: &mut InferCtxtAt,

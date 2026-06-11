@@ -66,6 +66,13 @@ Per candidate, all free, all before tokens:
 
 ## Infrastructure — boxes (the repos do not fit locally)
 
+> **Local single-instance path (no EC2).** For a single reconstructable instance whose
+> repo *does* fit locally (e.g. flux), the whole ablation runs on a laptop — see
+> [`pilots/09-flux-1613-sonnet/README.md`](pilots/09-flux-1613-sonnet/README.md) for the
+> end-to-end local recipe (toolchain, the `cargo xtask run` single-file oracle, the
+> rustup-proxy PATH gotcha, and driving an arm via cursor-agent or a Claude subagent).
+> The EC2 fleet below is for heavy repos and multi-instance batches.
+
 Reuse the Pro fleet; do not rebuild it. The relevant scripts in
 `swebench-pro/driver/`:
 

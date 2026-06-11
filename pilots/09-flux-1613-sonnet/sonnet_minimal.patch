@@ -1,0 +1,63 @@
+diff --git a/crates/flux-middle/src/rty/mod.rs b/crates/flux-middle/src/rty/mod.rs
+index 9ed03ebc73..529bd0e831 100644
+--- a/crates/flux-middle/src/rty/mod.rs
++++ b/crates/flux-middle/src/rty/mod.rs
+@@ -1111,6 +1111,19 @@ impl Sort {
+         matches!(self, Sort::Func(fsort) if fsort.skip_binders().output().is_bool())
+     }
+ 
++    /// Returns `true` if this sort or any field sort (transitively) is a function sort.
++    /// Used to detect composite sorts containing abstract refinements of function type,
++    /// e.g. `refined_by(len: int, hdl get: int -> bool)`.
++    pub fn has_func_sort(&self) -> bool {
++        let mut found = false;
++        self.walk(|sort, _| {
++            if matches!(sort, Sort::Func(_)) {
++                found = true;
++            }
++        });
++        found
++    }
++
+     /// Returns `true` if the sort is [`Bool`].
+     ///
+     /// [`Bool`]: Sort::Bool
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..f65a60b6db 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -12,6 +12,7 @@ use flux_infer::{
+     infer::{ConstrReason, InferCtxt, InferCtxtAt, InferCtxtRoot, InferResult},
+     refine_tree::Scope,
+ };
++use flux_middle::rty::InferMode;
+ use flux_macros::DebugAsJson;
+ use flux_middle::{
+     PlaceExt as _,
+@@ -231,7 +232,25 @@ impl<'a> TypeEnv<'a> {
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+         for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            // When the bound's index sort contains function-sort fields (i.e., abstract
++            // refinements of function type such as `hdl get: int -> bool`), a setter may
++            // legitimately change those fields.  Checking `ty <: bound` in that case would
++            // compare the new lambda against the old one via `abs_eq`, generating an
++            // unprovable constraint of the form `new_get(j) == old_get(j)`.
++            //
++            // To avoid this, replace the concrete index in `bound` with a fresh EVar when
++            // the sort of that index contains a function sort.  The EVar is immediately
++            // unified with `ty`'s index, making the check trivially satisfiable while
++            // preserving correctness for simple (non-function-sort) indices.
++            let effective_bound = if let TyKind::Indexed(bty, _) = bound.kind()
++                && bty.sort().has_func_sort()
++            {
++                let sort = bty.sort();
++                Ty::indexed(bty.clone(), infcx.fresh_infer_var(&sort, InferMode::EVar))
++            } else {
++                bound.clone()
++            };
++            infcx.subtyping(&ty, &effective_bound, ConstrReason::FoldLocal)?;
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())

@@ -1,0 +1,455 @@
+diff --git a/crates/flux-infer/src/infer.rs b/crates/flux-infer/src/infer.rs
+index cb6e8a66d7..f18d30e254 100644
+--- a/crates/flux-infer/src/infer.rs
++++ b/crates/flux-infer/src/infer.rs
+@@ -666,6 +666,7 @@ impl<'genv, 'tcx> InferCtxtAt<'_, '_, 'genv, 'tcx> {
+     // there are a couple of things missing here (e.g., checking clauses on the struct definition).
+     pub fn check_constructor(
+         &mut self,
++        env: &mut impl LocEnv,
+         variant: EarlyBinder<PolyVariant>,
+         generic_args: &[GenericArg],
+         fields: &[Ty],
+@@ -679,9 +680,11 @@ impl<'genv, 'tcx> InferCtxtAt<'_, '_, 'genv, 'tcx> {
+                 .instantiate(this.tcx(), &generic_args, &[])
+                 .replace_bound_refts_with(|sort, mode, _| this.fresh_infer_var(sort, mode));
+ 
+-            // Check arguments
++            // Check arguments. We need an environment to handle pointers in the fields (e.g.,
++            // a pointer to an opened mutable reference which is converted back into a reference
++            // bounded by the type in the variant signature).
+             for (actual, formal) in iter::zip(fields, variant.fields()) {
+-                this.subtyping(actual, formal, reason)?;
++                this.subtyping_with_env(env, actual, formal, reason)?;
+             }
+ 
+             // Check requires predicates
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79dff46..b16c5ab078 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -875,6 +875,11 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+ 
+                 env.check_ensures(infcx, &output.ensures, ConstrReason::Ret)?;
+ 
++                // Opened mutable references (see `LocKind::OpenedRef`) are normally checked
++                // against their bound when the enclosing ADT is folded back. If a reference is
++                // still open at this point, we must check its contents here.
++                env.close_opened_refs(infcx)?;
++
+                 Ok(obligations)
+             })
+             .with_span(span)?;
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..51c18b2700 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -24,7 +24,7 @@ use flux_middle::{
+         TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
+-        region_matching::{rty_match_regions, ty_match_regions},
++        region_matching::ty_match_regions,
+     },
+ };
+ use flux_rustc_bridge::{
+@@ -200,33 +200,7 @@ impl<'a> TypeEnv<'a> {
+         path: &Path,
+         bound: PtrToRefBound,
+     ) -> InferResult<Ty> {
+-        // ℓ: t1
+-        let t1 = self.bindings.lookup(path, infcx.span).fold(infcx)?;
+-
+-        // t1 <: t2
+-        let t2 = match bound {
+-            PtrToRefBound::Ty(t2) => {
+-                let t2 = rty_match_regions(&t2, &t1);
+-                infcx.subtyping(&t1, &t2, reason)?;
+-                t2
+-            }
+-            PtrToRefBound::Infer => {
+-                let t2 = t1.with_holes().replace_holes(|sorts, kind| {
+-                    debug_assert_eq!(kind, HoleKind::Pred);
+-                    infcx.fresh_kvar(sorts, KVarEncoding::Conj)
+-                });
+-                infcx.subtyping(&t1, &t2, reason)?;
+-                t2
+-            }
+-            PtrToRefBound::Identity => t1.clone(),
+-        };
+-
+-        // ℓ: †t2
+-        self.bindings
+-            .lookup(path, infcx.span)
+-            .block_with(t2.clone());
+-
+-        Ok(Ty::mk_ref(re, t2, Mutability::Mut))
++        self.bindings.ptr_to_ref(infcx, reason, re, path, bound)
+     }
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+@@ -266,6 +240,27 @@ impl<'a> TypeEnv<'a> {
+         Ok(())
+     }
+ 
++    /// Check that the contents of opened mutable references (see [`LocKind::OpenedRef`]) that
++    /// haven't been closed yet satisfy the reference's bound. Opened references are normally
++    /// closed (and thus checked against the field type in the variant signature) when the
++    /// enclosing ADT is folded back, but this can fail to happen, e.g., if the field holding the
++    /// reference is overwritten before the fold. In that case, we must still check the (possibly
++    /// updated) contents against the reference's bound at function exit.
++    pub(crate) fn close_opened_refs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
++        let span = infcx.span;
++        for (loc, bound) in self.bindings.opened_refs() {
++            // Closing an opened reference folds its location, which may close other opened
++            // references, so re-check that the location is still open (i.e., not blocked).
++            if matches!(self.bindings.get_loc(&loc).ty.kind(), TyKind::Blocked(_)) {
++                continue;
++            }
++            let ty = self.bindings.lookup(&Path::from(loc), span).fold(infcx)?;
++            infcx.subtyping(&ty, &bound, ConstrReason::Fold)?;
++            self.bindings.lookup(&Path::from(loc), span).block_with(bound);
++        }
++        Ok(())
++    }
++
+     pub(crate) fn move_place(&mut self, infcx: &mut InferCtxtAt, place: &Place) -> InferResult<Ty> {
+         let span = infcx.span;
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+@@ -343,13 +338,7 @@ impl<'a> TypeEnv<'a> {
+         path: &Path,
+         ty: &Ty,
+     ) -> InferResult<Loc> {
+-        if let Some(loc) = path.to_loc() {
+-            let ty = infcx.unpack(ty);
+-            self.bindings.insert(loc, LocKind::Universal, ty);
+-            Ok(loc)
+-        } else {
+-            bug!("unfold_strg_ref: unexpected path {path:?}")
+-        }
++        self.bindings.unfold_strg_ref(infcx, path, ty)
+     }
+ 
+     pub(crate) fn unfold(
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..4ef9fb4bd3 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -1,17 +1,20 @@
+ use std::{clone::Clone, fmt, ops::ControlFlow};
+ 
+-use flux_common::{iter::IterExt, tracked_span_bug};
++use flux_common::{bug, iter::IterExt, tracked_span_bug};
+ use flux_infer::{
+-    infer::{ConstrReason, InferCtxt, InferCtxtAt, InferErr, InferResult},
++    fixpoint_encoding::KVarEncoding,
++    infer::{ConstrReason, InferCtxt, InferCtxtAt, InferErr, InferResult, LocEnv},
+     projections::NormalizeExt as _,
+ };
+ use flux_middle::{
+     global_env::GlobalEnv,
+     queries::QueryResult,
+     rty::{
+-        AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt, List,
+-        Loc, Mutability, Path, PtrKind, Ref, Sort, Ty, TyKind, VariantIdx, VariantSig,
++        AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt,
++        HoleKind, List, Loc, Mutability, Path, PtrKind, Ref, Region, Sort, Ty, TyKind, VariantIdx,
++        VariantSig,
+         fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
++        region_matching::rty_match_regions,
+     },
+ };
+ use flux_rustc_bridge::mir::{FieldIdx, Place, PlaceElem};
+@@ -37,6 +40,17 @@ pub(crate) enum LocKind {
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+     LocalPtr(Ty),
+     Universal,
++    /// An `&mut T` stored in a field of a strongly owned (unfolded) ADT that has been *opened*
++    /// into a strong pointer. The pointer is converted back into a reference when the enclosing
++    /// ADT is folded, at which point the (possibly updated) contents are checked against the
++    /// field type in the ADT's variant signature (see [`InferCtxtAt::check_constructor`]).
++    ///
++    /// The type is the reference's bound (i.e., `T`) which we check at function exit if the
++    /// reference is still open (e.g., if the enclosing ADT was never folded back). See
++    /// [`TypeEnv::close_opened_refs`].
++    ///
++    /// [`TypeEnv::close_opened_refs`]: super::TypeEnv::close_opened_refs
++    OpenedRef(Ty),
+ }
+ 
+ pub(crate) trait LookupKey {
+@@ -292,6 +306,24 @@ impl PlacesTree {
+         self.map.shift_remove(loc);
+     }
+ 
++    /// Returns the locations of all opened mutable references (see [`LocKind::OpenedRef`]) that
++    /// haven't been closed yet (i.e., converted back into a reference, which blocks the location),
++    /// together with their bound.
++    pub(crate) fn opened_refs(&self) -> Vec<(Loc, Ty)> {
++        self.map
++            .iter()
++            .filter_map(|(loc, binding)| {
++                if let LocKind::OpenedRef(bound) = &binding.kind
++                    && !matches!(binding.ty.kind(), TyKind::Blocked(_))
++                {
++                    Some((*loc, bound.clone()))
++                } else {
++                    None
++                }
++            })
++            .collect()
++    }
++
+     pub(crate) fn local_ptrs(&self) -> Vec<(Loc, Ty, Ty)> {
+         self.map
+             .iter()
+@@ -357,6 +389,83 @@ impl PlacesTree {
+     fn cursor_for(&self, key: &impl LookupKey) -> Cursor {
+         Cursor::new(key)
+     }
++
++    /// Convert a (strong) pointer to a mutable reference. See [`TypeEnv::ptr_to_ref`].
++    ///
++    /// [`TypeEnv::ptr_to_ref`]: super::TypeEnv::ptr_to_ref
++    pub(crate) fn ptr_to_ref(
++        &mut self,
++        infcx: &mut InferCtxtAt,
++        reason: ConstrReason,
++        re: Region,
++        path: &Path,
++        bound: super::PtrToRefBound,
++    ) -> InferResult<Ty> {
++        // ℓ: t1
++        let t1 = self.lookup(path, infcx.span).fold(infcx)?;
++
++        // t1 <: t2
++        let t2 = match bound {
++            super::PtrToRefBound::Ty(t2) => {
++                let t2 = rty_match_regions(&t2, &t1);
++                infcx.subtyping(&t1, &t2, reason)?;
++                t2
++            }
++            super::PtrToRefBound::Infer => {
++                let t2 = t1.with_holes().replace_holes(|sorts, kind| {
++                    debug_assert_eq!(kind, HoleKind::Pred);
++                    infcx.fresh_kvar(sorts, KVarEncoding::Conj)
++                });
++                infcx.subtyping(&t1, &t2, reason)?;
++                t2
++            }
++            super::PtrToRefBound::Identity => t1.clone(),
++        };
++
++        // ℓ: †t2
++        self.lookup(path, infcx.span).block_with(t2.clone());
++
++        Ok(Ty::mk_ref(re, t2, Mutability::Mut))
++    }
++
++    /// See [`TypeEnv::unfold_strg_ref`].
++    ///
++    /// [`TypeEnv::unfold_strg_ref`]: super::TypeEnv::unfold_strg_ref
++    pub(crate) fn unfold_strg_ref(
++        &mut self,
++        infcx: &mut InferCtxt,
++        path: &Path,
++        ty: &Ty,
++    ) -> InferResult<Loc> {
++        if let Some(loc) = path.to_loc() {
++            let ty = infcx.unpack(ty);
++            self.insert(loc, LocKind::Universal, ty);
++            Ok(loc)
++        } else {
++            bug!("unfold_strg_ref: unexpected path {path:?}")
++        }
++    }
++}
++
++impl LocEnv for PlacesTree {
++    fn ptr_to_ref(
++        &mut self,
++        infcx: &mut InferCtxtAt,
++        reason: ConstrReason,
++        re: Region,
++        path: &Path,
++        bound: Ty,
++    ) -> InferResult<Ty> {
++        self.ptr_to_ref(infcx, reason, re, path, super::PtrToRefBound::Ty(bound))
++    }
++
++    fn unfold_strg_ref(&mut self, infcx: &mut InferCtxt, path: &Path, ty: &Ty) -> InferResult<Loc> {
++        self.unfold_strg_ref(infcx, path, ty)
++    }
++
++    fn get(&self, path: &Path) -> Ty {
++        self.get(path)
++    }
+ }
+ 
+ impl LookupResult<'_> {
+@@ -392,6 +501,18 @@ struct Unfolder<'a, 'infcx, 'genv, 'tcx> {
+     insertions: Vec<(Loc, Binding)>,
+     cursor: Cursor,
+     in_ref: Option<Mutability>,
++    /// Whether the type currently being unfolded is (the type of) a field of a strongly owned
++    /// (unfolded) ADT. In this case, mutable references can be opened into strong pointers
++    /// because the (possibly updated) contents will be checked against the field type in the
++    /// variant signature when the ADT is folded back. See [`LocKind::OpenedRef`].
++    in_adt_field: bool,
++    /// Whether the current root location is guaranteed to be folded back (and thus checked
++    /// against its bound), i.e., it is a universal location (e.g., the target of an `&strg`
++    /// reference, which must be folded to check the `ensures` clauses at every return) or an
++    /// opened reference (which is closed when its enclosing ADT is folded). Local places, in
++    /// contrast, can simply die without being folded so it is not sound to open references
++    /// nested inside them.
++    strg_root: bool,
+     has_work: bool,
+     span: Span,
+ }
+@@ -418,12 +539,23 @@ impl FallibleTypeFolder for Unfolder<'_, '_, '_, '_> {
+ 
+ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+     fn new(infcx: &'a mut InferCtxt<'infcx, 'genv, 'tcx>, cursor: Cursor, span: Span) -> Self {
+-        Unfolder { infcx, cursor, insertions: vec![], in_ref: None, has_work: true, span }
++        Unfolder {
++            infcx,
++            cursor,
++            insertions: vec![],
++            in_ref: None,
++            in_adt_field: false,
++            strg_root: false,
++            has_work: true,
++            span,
++        }
+     }
+ 
+     fn run(mut self, bindings: &mut PlacesTree) -> InferResult {
+         while self.should_continue() {
++            self.in_adt_field = false;
+             let binding = bindings.get_loc_mut(&self.cursor.loc);
++            self.strg_root = matches!(binding.kind, LocKind::Universal | LocKind::OpenedRef(_));
+             binding.ty = binding.ty.try_fold_with(&mut self)?;
+             for (loc, binding) in self.insertions.drain(..) {
+                 bindings.insert(loc, binding.kind, binding.ty);
+@@ -447,6 +579,11 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+             assert!(self.in_ref.is_none());
+             self.unfold_strg_ref(path, deref_ty);
+             Ok(Ty::ptr(PtrKind::Mut(*re), path.clone()))
++        } else if let Ref!(re, deref_ty, Mutability::Mut) = ty.kind()
++            && self.can_open_ref()
++        {
++            let loc = self.open_mut_ref(deref_ty);
++            Ok(Ty::ptr(PtrKind::Mut(*re), Path::from(loc)))
+         } else if ty.is_struct() {
+             let ty = self.unpack(ty);
+             let ty = self.downcast(&ty, FIRST_VARIANT)?;
+@@ -486,11 +623,19 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+             TyKind::Indexed(BaseTy::RawPtr(deref_ty, mutbl), idx)
+                 if self.infcx.allow_raw_deref() =>
+             {
++                self.in_adt_field = false;
+                 let deref_ty = deref_ty.try_fold_with(self)?;
+                 Ty::indexed(BaseTy::RawPtr(deref_ty, *mutbl), idx)
+             }
++            Ref!(re, deref_ty, Mutability::Mut) if self.can_open_ref() => {
++                let loc = self.open_mut_ref(deref_ty);
++                let path = Path::from(loc);
++                self.change_root(&path);
++                Ty::ptr(PtrKind::Mut(*re), path)
++            }
+             Ref!(re, ty, mutbl) => {
+                 self.in_ref = self.in_ref.max(Some(*mutbl));
++                self.in_adt_field = false;
+                 Ty::mk_ref(*re, ty.try_fold_with(self)?, *mutbl)
+             }
+             _ => tracked_span_bug!("invalid deref of `{ty:?}`"),
+@@ -516,14 +661,37 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+         loc
+     }
+ 
++    /// Whether a mutable reference in the current position can be opened into a strong pointer.
++    /// This is only sound if the reference is stored in a field of a strongly owned (unfolded)
++    /// ADT that is guaranteed to be folded back (see [`Unfolder::strg_root`]) because the
++    /// (possibly updated) contents will be checked against the field type in the variant
++    /// signature when the ADT is folded.
++    fn can_open_ref(&self) -> bool {
++        self.strg_root && self.in_adt_field && self.in_ref.is_none()
++    }
++
++    /// Open a mutable reference into a fresh location holding its contents. The pointer is
++    /// converted back into a reference when the enclosing ADT is folded. See
++    /// [`LocKind::OpenedRef`].
++    fn open_mut_ref(&mut self, deref_ty: &Ty) -> Loc {
++        let name = self.infcx.define_unknown_var(&Sort::Loc);
++        let loc = Loc::from(name);
++        let ty = self.infcx.hoister(true).hoist(deref_ty);
++        self.insertions
++            .push((loc, Binding { kind: LocKind::OpenedRef(deref_ty.clone()), ty }));
++        loc
++    }
++
+     fn field(&mut self, ty: &Ty, f: FieldIdx) -> InferResult<Ty> {
+         let ty = match ty.kind() {
+             TyKind::Indexed(BaseTy::Tuple(fields), idx) => {
++                self.in_adt_field = false;
+                 let mut fields = fields.to_vec();
+                 fields[f.as_usize()] = fields[f.as_usize()].try_fold_with(self)?;
+                 Ty::indexed(BaseTy::Tuple(fields.into()), idx.clone())
+             }
+             TyKind::Indexed(BaseTy::Closure(def_id, upvar_tys, args, no_panic), idx) => {
++                self.in_adt_field = false;
+                 let mut upvar_tys = upvar_tys.to_vec();
+                 upvar_tys[f.as_usize()] = upvar_tys[f.as_usize()].try_fold_with(self)?;
+                 Ty::indexed(
+@@ -532,6 +700,7 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+                 )
+             }
+             TyKind::Indexed(BaseTy::Coroutine(def_id, resume_ty, upvar_tys, args), idx) => {
++                self.in_adt_field = false;
+                 let mut upvar_tys = upvar_tys.to_vec();
+                 upvar_tys[f.as_usize()] = upvar_tys[f.as_usize()].try_fold_with(self)?;
+                 Ty::indexed(
+@@ -544,11 +713,13 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+                     .into_iter()
+                     .map(|ty| self.unpack_for_downcast(&ty))
+                     .collect_vec();
++                self.in_adt_field = true;
+                 fields[f.as_usize()] = fields[f.as_usize()].try_fold_with(self)?;
+                 let args = args.with_holes();
+                 Ty::downcast(adt.clone(), args, ty.clone(), FIRST_VARIANT, fields.into())
+             }
+             TyKind::Downcast(adt, args, ty, variant, fields) => {
++                self.in_adt_field = true;
+                 let mut fields = fields.to_vec();
+                 fields[f.as_usize()] = fields[f.as_usize()].try_fold_with(self)?;
+                 Ty::downcast(adt.clone(), args.clone(), ty.clone(), *variant, fields.into())
+@@ -578,6 +749,7 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+     }
+ 
+     fn index(&mut self, ty: &Ty) -> InferResult {
++        self.in_adt_field = false;
+         match ty.kind() {
+             TyKind::Indexed(BaseTy::Array(arr_ty, _), _) => {
+                 arr_ty.try_fold_with(self)?;
+@@ -903,8 +1075,12 @@ fn fold(
+                 let ty = if partially_moved {
+                     Ty::uninit()
+                 } else {
++                    // Note we pass `bindings` as the `LocEnv` so that fields holding a pointer to
++                    // an opened mutable reference (see [`LocKind::OpenedRef`]) are converted back
++                    // into a reference (via `ptr_to_ref`) with the field type in the variant
++                    // signature as the bound.
+                     infcx
+-                        .check_constructor(variant_sig, args, &fields, ConstrReason::Fold)
++                        .check_constructor(bindings, variant_sig, args, &fields, ConstrReason::Fold)
+                         .unwrap_or_else(|err| tracked_span_bug!("{err:?}"))
+                 };
+ 
+@@ -962,6 +1138,7 @@ mod pretty {
+                 LocKind::Local | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+                 LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::OpenedRef(ty) => w!(cx, f, "[opened-ref({:?})]", ty),
+             }
+         }
+     }

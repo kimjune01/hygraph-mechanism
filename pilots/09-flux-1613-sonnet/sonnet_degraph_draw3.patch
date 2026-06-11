@@ -1,0 +1,190 @@
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79dff46..12707747fc 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -7,7 +7,8 @@ use flux_common::{
+ use flux_config::{self as config, InferOpts};
+ use flux_infer::{
+     infer::{
+-        ConstrReason, GlobalEnvExt as _, InferCtxt, InferCtxtRoot, InferResult, SubtypeReason,
++        ConstrReason, GlobalEnvExt as _, InferCtxt, InferCtxtAt, InferCtxtRoot, InferResult,
++        SubtypeReason,
+     },
+     projections::NormalizeExt as _,
+     refine_tree::{Marker, RefineCtxtTrace},
+@@ -350,7 +351,7 @@ fn check_fn_subtyping(
+ 
+         // 6. Update state with Output "ensures" and check super ensures
+         env.assume_ensures(infcx, &output.ensures, span);
+-        fold_local_ptrs(infcx, &mut env, span)?;
++        fold_local_ptrs(infcx, &mut env)?;
+         env.check_ensures(
+             infcx,
+             &super_output.ensures,
+@@ -458,17 +459,15 @@ fn unfold_local_ptrs(
+     Ok(tys)
+ }
+ 
+-/// Fold local pointers implements roughly a rule like the following (for all local pointers)
+-/// that converts the local pointers created via [`unfold_local_ptrs`] back into `&mut`.
+-///
+-/// ```text
+-///       T1 <: T2
+-/// --------------------- [local-fold]
+-/// Γ, l:[<: T2] T1 => Γ
+-/// ```
+-fn fold_local_ptrs(infcx: &mut InferCtxt, env: &mut TypeEnv, span: Span) -> InferResult {
+-    let mut at = infcx.at(span);
+-    env.fold_local_ptrs(&mut at)
++/// Fold local pointers converts the local pointers created via [`unfold_local_ptrs`] back
++/// into `&mut`. For each local pointer `l: [<: T_bound] T_post`:
++/// - If `T_post` is an indexed ADT whose index contains a Lambda (function-sort field
++///   changed), propagate `T_post` into the environment via `replace_mut_ref` and let the
++///   subsequent struct fold verify the ADT's invariants.
++/// - Otherwise, run the standard `subtyping(T_post, T_bound)` check to enforce any
++///   predicate invariants (e.g. `n+1 ≤ 10` for `&mut i32{v: v≤10}`).
++fn fold_local_ptrs(infcx: &mut InferCtxtAt, env: &mut TypeEnv) -> InferResult {
++    env.fold_local_ptrs(infcx)
+ }
+ 
+ fn promoted_fn_sig(ty: &Ty) -> PolyFnSig {
+@@ -1004,7 +1003,7 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+             });
+ 
+         env.assume_ensures(infcx, &output.ensures, span);
+-        fold_local_ptrs(infcx, env, span).with_span(span)?;
++        fold_local_ptrs(&mut infcx.at(span), env).with_span(span)?;
+ 
+         Ok(ResolvedCall {
+             output: output.ret,
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..2ecfeac750 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -23,7 +23,7 @@ use flux_middle::{
+         INNERMOST, Lambda, List, Loc, Mutability, Path, PtrKind, Region, SortCtor, SubsetTy, Ty,
+         TyKind, VariantIdx,
+         canonicalize::{Hoister, LocalHoister},
+-        fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
++        fold::{FallibleTypeFolder, TypeFoldable, TypeSuperVisitable, TypeVisitable, TypeVisitor},
+         region_matching::{rty_match_regions, ty_match_regions},
+     },
+ };
+@@ -231,7 +231,23 @@ impl<'a> TypeEnv<'a> {
+ 
+     pub(crate) fn fold_local_ptrs(&mut self, infcx: &mut InferCtxtAt) -> InferResult {
+         for (loc, bound, ty) in self.bindings.local_ptrs() {
+-            infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            if fold_local_ptr_needs_replace(&bound, &ty) {
++                // For indexed ADT types (struct sorts) where the post-call index
++                // contains a Lambda (i.e., a &strg call changed a function-sort
++                // field like `hdl get: int -> bool`), propagate T_post into the
++                // environment so the subsequent struct fold can check the ADT's
++                // own invariants. A direct `subtyping(T_post, T_bound)` here would
++                // generate an unprovable lambda-equality constraint such as
++                // `∀v. (v==0 || f(v)) == f(v)`, which is neither a Flux invariant
++                // nor checkable by the fixpoint solver for opaque abstract sorts.
++                self.bindings.replace_mut_ref(&bound, &ty);
++            } else {
++                // For non-ADT types (e.g. i32{v:v<=10}) or ADT types with no lambda
++                // in the post index, use the standard subtyping check. This generates
++                // the predicate constraint (e.g. n+1 <= 10) that enforces the caller's
++                // invariant. There is no subsequent struct fold to do this check.
++                infcx.subtyping(&ty, &bound, ConstrReason::FoldLocal)?;
++            }
+             self.bindings.remove_local(&loc);
+         }
+         Ok(())
+@@ -912,6 +928,39 @@ enum LocInfo {
+     Var(String),
+ }
+ 
++/// Returns `true` when the `fold_local_ptrs` subtyping check should be replaced
++/// by [`PlacesTree::replace_mut_ref`] instead.
++///
++/// This fires when `bound` is an indexed ADT type and `ty`'s index contains a Lambda
++/// (`ExprKind::Abs`). That pattern arises when a `&strg T` call (via a `&mut T`
++/// reborrow) changed a function-sort field such as `hdl get: int -> bool`. In that
++/// case `subtyping(ty, bound)` would call `idxs_eq` which generates an unprovable
++/// lambda-equality constraint (e.g. `∀v. (v==0||f(v)) == f(v)`) for opaque abstract
++/// refinements.  The subsequent struct fold (`check_constructor`) verifies the ADT's
++/// actual invariants; the equality check here is both redundant and overly strict.
++///
++/// For all other cases (primitive indexed types, constrained existentials, ADT types
++/// whose post index contains no Lambda) the original `subtyping` check is kept.
++fn fold_local_ptr_needs_replace(bound: &Ty, ty: &Ty) -> bool {
++    struct ContainsAbs;
++    impl TypeVisitor for ContainsAbs {
++        type BreakTy = ();
++        fn visit_expr(&mut self, e: &Expr) -> ControlFlow<()> {
++            if matches!(e.kind(), ExprKind::Abs(_)) {
++                ControlFlow::Break(())
++            } else {
++                e.super_visit_with(self)
++            }
++        }
++    }
++    match (ty.kind(), bound.kind()) {
++        (TyKind::Indexed(BaseTy::Adt(..), ty_idx), TyKind::Indexed(BaseTy::Adt(..), _)) => {
++            ty_idx.visit_with(&mut ContainsAbs).is_break()
++        }
++        _ => false,
++    }
++}
++
+ fn loc_info(loc: &Loc) -> LocInfo {
+     match loc {
+         Loc::Local(local) => LocInfo::Local(format!("{local:?}")),
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..492c591937 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -11,7 +11,7 @@ use flux_middle::{
+     rty::{
+         AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt, List,
+         Loc, Mutability, Path, PtrKind, Ref, Sort, Ty, TyKind, VariantIdx, VariantSig,
+-        fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
++        fold::{FallibleTypeFolder, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitable, TypeVisitor},
+     },
+ };
+ use flux_rustc_bridge::mir::{FieldIdx, Place, PlaceElem};
+@@ -305,6 +305,15 @@ impl PlacesTree {
+             .collect()
+     }
+ 
++    /// After a `&strg T` call via a `&mut T` reborrow, update all `&mut T` occurrences in
++    /// the environment to `&mut new_inner`. This propagates the post-call type into any
++    /// bindings (e.g., a struct Downcast field) that held the reference, so that the
++    /// subsequent struct fold can verify the correct post-state invariants.
++    pub(crate) fn replace_mut_ref(&mut self, old_inner: &Ty, new_inner: &Ty) {
++        let mut updater = MutRefUpdater { old_inner, new_inner };
++        self.fmap_mut(|_, ty| ty.fold_with(&mut updater));
++    }
++
+     fn remove(&mut self, loc: &Loc) -> Binding {
+         self.map
+             .shift_remove(loc)
+@@ -982,3 +991,23 @@ impl TypeFoldable for PlacesTree {
+         Ok(this)
+     }
+ }
++
++/// A [`TypeFolder`] that rewrites `&mut old_inner` → `&mut new_inner` in a type tree.
++///
++/// Used by [`PlacesTree::replace_mut_ref`] to propagate post-call refinement types
++/// into struct Downcast fields after an `&strg T` call via a `&mut T` reborrow.
++struct MutRefUpdater<'a> {
++    old_inner: &'a Ty,
++    new_inner: &'a Ty,
++}
++
++impl TypeFolder for MutRefUpdater<'_> {
++    fn fold_bty(&mut self, bty: &BaseTy) -> BaseTy {
++        if let BaseTy::Ref(re, inner, Mutability::Mut) = bty
++            && inner == self.old_inner
++        {
++            return BaseTy::Ref(*re, self.new_inner.clone(), Mutability::Mut);
++        }
++        bty.super_fold_with(self)
++    }
++}

@@ -1,0 +1,77 @@
+You are diagnosing and fixing a real bug in `flux`, a refinement type checker for Rust (it verifies Rust programs against refinement-type annotations using an SMT backend). The bug is in the checker's own source code. You work ONLY inside this repository checkout, which is your current working directory:
+
+    REPO ROOT: <REPO_ROOT>
+
+## The bug
+flux-rs/flux issue #1613: "error when mutating a composite-sort abstract refinement field via setter"
+
+When implementing a setter that updates an abstract refinement on a composite-sort, Flux unexpectedly returns an error. This program SHOULD verify but currently does not:
+
+```rust
+#[flux_rs::opaque]
+#[flux_rs::refined_by(len: int, hdl get: int -> bool)]
+struct Slot([bool]);
+
+impl Slot {
+    #[flux_rs::trusted]
+    #[flux_rs::sig(fn(self: &strg Slot[@n, @f], i: usize{i < n}) ensures self: Slot[n, |j| j == i || f(j)])]
+    fn set(&mut self, i: usize) { self.0[i] = true; }
+}
+
+#[flux_rs::refined_by(slot: Slot)]
+struct Container<'a> {
+    #[flux_rs::field({&mut Slot[slot] | slot.len > 0})]
+    slot: &'a mut Slot,
+}
+
+impl<'a> Container<'a> {
+    #[flux_rs::sig(fn(self: &strg Container[@s]) ensures self: Container)]
+    fn update(&mut self) {
+        self.slot.set(0); // error[E0999]: type invariant may not hold (when place is folded)
+    }
+}
+```
+
+Expected: after `set(0)`, `self.slot` has sort `Slot[s.slot.len, |j| j == 0 || f(j)]` where `f` was captured from the pre-call sort. Re-folding Container only requires `slot.len > 0` = `s.slot.len > 0`, provable from the original field invariant.
+
+## How to run flux on a single test program
+flux verifies one `.rs` file at a time. From the repo root:
+
+    cargo xtask run <path-to-file.rs>
+
+Interpreting output:
+- `error[E0999]: type invariant may not hold` (or any `error[...]`) => the program FAILED verification.
+- a `summary. N functions processed ...` line with NO `error` lines above it => the program VERIFIED.
+The toolchain is already built, so the first run is fast; after you EDIT checker source the next run recompiles incrementally (~30-90s). Both `flux_rs::` and `flux::` attribute syntax work in test programs.
+
+## Where the checker lives
+The refinement checker is in `crates/flux-refineck/src/` — especially `type_env.rs`, `checker.rs`, and `type_env/place_ty.rs`. Supporting refinement types are in `crates/flux-middle/`. The error message "type invariant may not hold (when place is folded)" is your starting thread.
+
+## Regression check
+    cargo xtask test --suite basic --filter abstract
+(omit --filter for the full basic suite; it is slow). All previously-passing tests must still pass.
+
+## Hard boundaries (you are a contributor; the fix is NOT in the repo)
+- MODIFY only non-test Rust source under `crates/`. Do NOT modify anything under `tests/`.
+- Do NOT consult git history, git log, branches, stashes, reflog, tags, or any remote for "the fix" — it is not reachable and looking for it is cheating.
+- Do NOT read any directory outside <REPO_ROOT> (except writing scratch files under <SCRATCH>). Do NOT browse the web.
+- Write your own scratch reproducer `.rs` files in <SCRATCH>, never in the repo's `tests/` dir.
+
+## Your approach: run a hypothesis graph (do not jump to a fix)
+Diagnose by perturbation, and let the diagnosis drive the fix. Maintain a hypothesis-graph document at <SCRATCH>/HYPOTHESIS_GRAPH.md. Work in cycles:
+
+1. **Observation (H0).** Reproduce the reported error. Record the exact failing obligation the checker emits.
+2. **Differential narrowing.** Propose competing hypotheses for the root cause and design *decisive, cheap, reversible* perturbations — minimal variant programs that change ONE structural dimension at a time — then classify each result's trajectory (convergent / divergent / oscillatory / chaotic). Illustrative dimensions worth isolating: the *sort* of the refinement component being updated (an abstract function sort like `hdl get: int -> bool` vs a plain `int` component); the *number* of components in the composite; whether the mutated field is reached through a `&mut` field-borrow vs a direct `&strg` argument; whether the setter actually *changes* the refinement or leaves it identical; nesting depth. The point is to find the smallest set of conditions under which the bug fires vs does not. Each kill condition (a perturbation that does NOT reproduce) names the next hypothesis — follow that edge.
+3. **Root cause.** Trace/dump the actual constraint the checker emits and localize exactly WHERE the callee's post-call state is dropped on the field-borrowed place. Label each node's reasoning mode — abduction (proposed), deduction (traced from code), induction (ran and measured) — and keep confidence tied to mode.
+4. **Fix at the root.** Implement the minimal change that addresses the *root cause you localized*, not the surface symptom of the single reported example. Because you diagnosed by perturbation, your fix must handle every variant your differential narrowing showed is the SAME bug — verify each of those variant programs now passes.
+5. **Soundness probe.** Construct an INVALID variant — e.g. a setter that VIOLATES the field invariant (shrinks a length that must stay `> 0`) — and confirm your fix still REJECTS it (E0999). A fix that accepts an invalid program is unsound; if that happens, kill the fix and re-enter the graph. Both the valid variants must verify AND the invalid variant must be rejected.
+6. **Regression.** Run the abstract-refinement suite; nothing previously green may go red.
+
+Write each node (hypothesis, perturbation, observed output, trajectory shape, kill-or-confirm verdict, edge to next) to the graph document as you go. Keep going until: the root cause is confirmed, the reported program verifies, your generalization-probe variants verify, and the soundness probe is correctly rejected.
+
+## When done, report:
+- VERDICT: did the reported program verify? (and the results of your generalization probes + soundness probe + regression suite)
+- The source file(s) and function(s) you changed.
+- A one-paragraph root-cause diagnosis and description of your fix.
+- A list of the perturbation variants you ran and each one's verdict.
+- The output of `git diff --stat`.

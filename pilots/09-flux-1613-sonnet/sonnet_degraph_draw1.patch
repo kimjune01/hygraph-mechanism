@@ -1,0 +1,331 @@
+diff --git a/crates/flux-refineck/src/checker.rs b/crates/flux-refineck/src/checker.rs
+index 3ed79dff46..110bef3517 100644
+--- a/crates/flux-refineck/src/checker.rs
++++ b/crates/flux-refineck/src/checker.rs
+@@ -1297,6 +1297,9 @@ impl<'ck, 'genv, 'tcx, M: Mode> Checker<'ck, 'genv, 'tcx, M> {
+             )?;
+             self.check_ret(&mut infcx, &mut env, span)
+         } else if self.body.is_join_point(target) {
++            // Repackage strongly unfolded `&mut`s so environments coming from different
++            // branches have compatible shapes.
++            env.pack_mut_ref_ptrs();
+             if M::check_goto_join_point(self, infcx, env, span, target)? {
+                 self.queue.insert(target);
+             }
+diff --git a/crates/flux-refineck/src/type_env.rs b/crates/flux-refineck/src/type_env.rs
+index f8237f0b89..6d7e7e307d 100644
+--- a/crates/flux-refineck/src/type_env.rs
++++ b/crates/flux-refineck/src/type_env.rs
+@@ -138,6 +138,9 @@ impl<'a> TypeEnv<'a> {
+         place: &Place,
+     ) -> InferResult<Ty> {
+         let span = infcx.span;
++        if mutbl == Mutability::Mut && place_has_deref(place) {
++            self.bindings.unfold_strong_mut(infcx, place, span)?;
++        }
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+         if result.is_strg && mutbl == Mutability::Mut {
+             Ok(Ty::ptr(PtrKind::Mut(re), result.path()))
+@@ -237,6 +240,14 @@ impl<'a> TypeEnv<'a> {
+         Ok(())
+     }
+ 
++    /// Convert any [`LocKind::MutRef`] locations back into inline `&mut` types.
++    ///
++    /// Must be called before a join point so that environments from different branches
++    /// have compatible shapes.
++    pub(crate) fn pack_mut_ref_ptrs(&mut self) {
++        self.bindings.pack_mut_ref_ptrs();
++    }
++
+     /// Updates the type of `place` to `new_ty`. This may involve a *strong update* if we have
+     /// ownership of `place` or a *weak update* if it's behind a reference (which fires a subtyping
+     /// constraint)
+@@ -257,6 +268,9 @@ impl<'a> TypeEnv<'a> {
+         let rustc_ty = place.ty(infcx.genv, self.local_decls)?.ty;
+         let new_ty = ty_match_regions(&new_ty, &rustc_ty);
+         let span = infcx.span;
++        if place_has_deref(place) {
++            self.bindings.unfold_strong_mut(infcx, place, span)?;
++        }
+         let result = self.bindings.lookup_unfolding(infcx, place, span)?;
+         if result.is_strg {
+             result.update(new_ty);
+@@ -912,6 +926,10 @@ enum LocInfo {
+     Var(String),
+ }
+ 
++fn place_has_deref(place: &Place) -> bool {
++    place.projection.iter().any(|elem| matches!(elem, PlaceElem::Deref))
++}
++
+ fn loc_info(loc: &Loc) -> LocInfo {
+     match loc {
+         Loc::Local(local) => LocInfo::Local(format!("{local:?}")),
+diff --git a/crates/flux-refineck/src/type_env/place_ty.rs b/crates/flux-refineck/src/type_env/place_ty.rs
+index f3ab789c44..438a524224 100644
+--- a/crates/flux-refineck/src/type_env/place_ty.rs
++++ b/crates/flux-refineck/src/type_env/place_ty.rs
+@@ -11,7 +11,10 @@ use flux_middle::{
+     rty::{
+         AdtDef, BaseTy, Binder, EarlyBinder, Expr, FIRST_VARIANT, GenericArg, GenericArgsExt, List,
+         Loc, Mutability, Path, PtrKind, Ref, Sort, Ty, TyKind, VariantIdx, VariantSig,
+-        fold::{FallibleTypeFolder, TypeFoldable, TypeVisitable, TypeVisitor},
++        fold::{
++            FallibleTypeFolder, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeSuperVisitable,
++            TypeVisitable, TypeVisitor,
++        },
+     },
+ };
+ use flux_rustc_bridge::mir::{FieldIdx, Place, PlaceElem};
+@@ -37,6 +40,12 @@ pub(crate) enum LocKind {
+     // An &mut T unfolded "locally" at a call-site; with the super-type T
+     LocalPtr(Ty),
+     Universal,
++    /// A location created by strongly unfolding a `&mut` that lives inside a strongly owned
++    /// aggregate (e.g., a struct field annotated with `&mut T[idx]`). The pointee can be
++    /// strongly updated; consistency is re-established when the enclosing aggregate is folded
++    /// back (see [`fold`]) or when the location is packed at a join point
++    /// (see [`PlacesTree::pack_mut_ref_ptrs`]).
++    MutRef,
+ }
+ 
+ pub(crate) trait LookupKey {
+@@ -128,6 +137,51 @@ impl PlacesTree {
+         Unfolder::new(infcx, cursor, span).run(self)
+     }
+ 
++    /// Like [`unfold`] but enters `&mut T` fields inside strongly-owned aggregates using a
++    /// [`LocKind::MutRef`] location instead of [`LocKind::LocalPtr`], so that subsequent strong
++    /// updates to the pointee are not constrained by the original type when the location is
++    /// folded back.
++    pub(crate) fn unfold_strong_mut(
++        &mut self,
++        infcx: &mut InferCtxt,
++        key: &impl LookupKey,
++        span: Span,
++    ) -> InferResult {
++        let cursor = self.cursor_for(key);
++        let mut unfolder = Unfolder::new(infcx, cursor, span);
++        unfolder.strong_mut = true;
++        unfolder.run(self)
++    }
++
++    /// Convert any [`LocKind::MutRef`] locations back into inline `&mut` types.
++    ///
++    /// This must be called before a join point so that environments coming from different
++    /// branches have compatible shapes.
++    pub(crate) fn pack_mut_ref_ptrs(&mut self) {
++        if !self.map.values().any(|binding| matches!(binding.kind, LocKind::MutRef)) {
++            return;
++        }
++        struct Inliner {
++            snapshot: PlacesTree,
++        }
++        impl TypeFolder for Inliner {
++            fn fold_ty(&mut self, ty: &Ty) -> Ty {
++                if let TyKind::Ptr(PtrKind::Mut(re), path) = ty.kind()
++                    && let Some(binding) = self.snapshot.map.get(&path.loc)
++                    && matches!(binding.kind, LocKind::MutRef)
++                {
++                    let pointee = self.snapshot.get(path);
++                    Ty::mk_ref(*re, self.fold_ty(&pointee), Mutability::Mut)
++                } else {
++                    ty.super_fold_with(self)
++                }
++            }
++        }
++        let mut inliner = Inliner { snapshot: self.clone() };
++        self.map.retain(|_, binding| !matches!(binding.kind, LocKind::MutRef));
++        self.fmap_mut(|_, ty| ty.fold_with(&mut inliner));
++    }
++
+     pub fn unblock(&mut self, infcx: &mut InferCtxt, place: &Place) {
+         let mut cursor = self.cursor_for(place);
+         let mut ty = self.get_loc(&cursor.loc).ty.clone();
+@@ -394,6 +448,12 @@ struct Unfolder<'a, 'infcx, 'genv, 'tcx> {
+     in_ref: Option<Mutability>,
+     has_work: bool,
+     span: Span,
++    /// When `true`, `&mut T` fields crossed inside a strongly-owned aggregate are unfolded into
++    /// [`LocKind::MutRef`] locations instead of the normal [`LocKind::LocalPtr`] path.
++    strong_mut: bool,
++    /// Set to `true` when the cursor has crossed at least one struct field boundary.
++    /// Used together with `strong_mut` to guard the `MutRef` creation in [`Unfolder::deref`].
++    crossed_field: bool,
+ }
+ 
+ impl FallibleTypeFolder for Unfolder<'_, '_, '_, '_> {
+@@ -418,7 +478,16 @@ impl FallibleTypeFolder for Unfolder<'_, '_, '_, '_> {
+ 
+ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+     fn new(infcx: &'a mut InferCtxt<'infcx, 'genv, 'tcx>, cursor: Cursor, span: Span) -> Self {
+-        Unfolder { infcx, cursor, insertions: vec![], in_ref: None, has_work: true, span }
++        Unfolder {
++            infcx,
++            cursor,
++            insertions: vec![],
++            in_ref: None,
++            has_work: true,
++            span,
++            strong_mut: false,
++            crossed_field: false,
++        }
+     }
+ 
+     fn run(mut self, bindings: &mut PlacesTree) -> InferResult {
+@@ -433,6 +502,9 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+     }
+ 
+     fn unfold(&mut self, ty: &Ty) -> InferResult<Ty> {
++        if self.strong_mut {
++            return Ok(ty.clone());
++        }
+         if let TyKind::Indexed(BaseTy::Adt(adt, args), _) = ty.kind()
+             && adt.is_box()
+         {
+@@ -462,6 +534,9 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+         let ty = match ty.kind() {
+             TyKind::StrgRef(re, path, ty) => {
+                 self.unfold_strg_ref(path, ty);
++                if self.strong_mut {
++                    self.change_root(path);
++                }
+                 Ty::ptr(PtrKind::Mut(*re), path.clone())
+             }
+             TyKind::Ptr(pk, path) => {
+@@ -489,6 +564,24 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+                 let deref_ty = deref_ty.try_fold_with(self)?;
+                 Ty::indexed(BaseTy::RawPtr(deref_ty, *mutbl), idx)
+             }
++            TyKind::Indexed(BaseTy::RawPtr(..), _) if self.strong_mut => {
++                // In strong_mut mode we only care about &mut fields inside &strg aggregates.
++                // Raw pointer derefs are not that, so just leave the type unchanged and stop
++                // further unfolding.
++                return Ok(ty.clone());
++            }
++            Ref!(re, deref_ty, Mutability::Mut)
++                if self.strong_mut
++                    && self.in_ref.is_none()
++                    && self.crossed_field
++                    && matches!(self.cursor.loc, Loc::Var(_))
++                    && has_refinable_structure(deref_ty) =>
++            {
++                let loc = self.unfold_mut_ref(deref_ty);
++                let path = Path::from(loc);
++                self.change_root(&path);
++                Ty::ptr(PtrKind::Mut(*re), path)
++            }
+             Ref!(re, ty, mutbl) => {
+                 self.in_ref = self.in_ref.max(Some(*mutbl));
+                 Ty::mk_ref(*re, ty.try_fold_with(self)?, *mutbl)
+@@ -498,6 +591,14 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+         Ok(ty)
+     }
+ 
++    fn unfold_mut_ref(&mut self, deref_ty: &Ty) -> Loc {
++        let name = self.infcx.define_unknown_var(&Sort::Loc);
++        let loc = Loc::from(name);
++        let ty = self.infcx.hoister(true).hoist(deref_ty);
++        self.insertions.push((loc, Binding { kind: LocKind::MutRef, ty }));
++        loc
++    }
++
+     fn unfold_strg_ref(&mut self, path: &Path, ty: &Ty) {
+         let loc = path.to_loc().unwrap_or_else(|| tracked_span_bug!());
+         let kind = match loc {
+@@ -517,6 +618,7 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+     }
+ 
+     fn field(&mut self, ty: &Ty, f: FieldIdx) -> InferResult<Ty> {
++        self.crossed_field = true;
+         let ty = match ty.kind() {
+             TyKind::Indexed(BaseTy::Tuple(fields), idx) => {
+                 let mut fields = fields.to_vec();
+@@ -606,6 +708,7 @@ impl<'a, 'infcx, 'genv, 'tcx> Unfolder<'a, 'infcx, 'genv, 'tcx> {
+ 
+     fn change_root(&mut self, path: &Path) {
+         self.has_work = true;
++        self.crossed_field = false;
+         self.cursor.change_root(path);
+     }
+ 
+@@ -867,6 +970,44 @@ fn downcast_enum(
+     Ok(variant_sig.fields.to_vec())
+ }
+ 
++fn has_refinable_structure(ty: &Ty) -> bool {
++    if matches!(ty.kind(), TyKind::Downcast(..)) {
++        return true;
++    }
++    matches!(
++        ty.as_bty_skipping_existentials(),
++        Some(
++            BaseTy::Adt(..)
++                | BaseTy::Slice(_)
++                | BaseTy::Array(..)
++                | BaseTy::Tuple(_)
++                | BaseTy::Int(_)
++                | BaseTy::Uint(_)
++                | BaseTy::Bool
++                | BaseTy::Char
++        )
++    )
++}
++
++fn count_ptr_refs(bindings: &PlacesTree, loc: &Loc) -> usize {
++    struct Counter<'a>(&'a Loc, usize);
++    impl TypeVisitor for Counter<'_> {
++        fn visit_ty(&mut self, ty: &Ty) -> ControlFlow<Self::BreakTy> {
++            if let TyKind::Ptr(_, path) = ty.kind()
++                && path.loc == *self.0
++            {
++                self.1 += 1;
++            }
++            ty.super_visit_with(self)
++        }
++    }
++    let mut counter = Counter(loc, 0);
++    for (_, binding) in bindings.iter() {
++        let _ = binding.ty.visit_with(&mut counter);
++    }
++    counter.1
++}
++
+ fn fold(
+     bindings: &mut PlacesTree,
+     infcx: &mut InferCtxtAt,
+@@ -874,6 +1015,25 @@ fn fold(
+     is_strg: bool,
+ ) -> QueryResult<Ty> {
+     match ty.kind() {
++        TyKind::Ptr(PtrKind::Mut(re), path) => {
++            let pointee = path.to_loc().and_then(|loc| {
++                let binding = bindings.map.get(&loc)?;
++                if matches!(binding.kind, LocKind::MutRef) {
++                    Some((loc, binding.ty.clone()))
++                } else {
++                    None
++                }
++            });
++            if let Some((loc, pointee)) = pointee {
++                let deref_ty = fold(bindings, infcx, &pointee.unblocked(), is_strg)?;
++                if count_ptr_refs(bindings, &loc) <= 1 {
++                    bindings.remove(&loc);
++                }
++                Ok(Ty::mk_ref(*re, deref_ty, Mutability::Mut))
++            } else {
++                Ok(ty.clone())
++            }
++        }
+         TyKind::Ptr(PtrKind::Box, path) => {
+             let loc = path.to_loc().unwrap_or_else(|| tracked_span_bug!());
+             let binding = bindings.remove(&loc);
+@@ -962,6 +1122,7 @@ mod pretty {
+                 LocKind::Local | LocKind::Universal => Ok(()),
+                 LocKind::Box(_) => w!(cx, f, "[box]"),
+                 LocKind::LocalPtr(ty) => w!(cx, f, "[local-ptr({:?})]", ty),
++                LocKind::MutRef => w!(cx, f, "[mut-ref]"),
+             }
+         }
+     }
