@@ -9,7 +9,7 @@ A soundness bug whose correct fix is an XOR-shaped predicate. Everything to repr
 - **Step-by-step runbook:** [`pilots/11-verus-2219/REPRODUCE.md`](pilots/11-verus-2219/REPRODUCE.md) — build verus at base `23dc6e75`, recalibrate the gate to your binary, run an arm, grade.
 - **The gate:** `tools/case-check.py` (+ `calibration.json`) — the fixpoint-closed type-former enumeration; `gate2/` is the corrected gate (case-check + a human-approved divergence golden from `#2501`).
 - **The grading harness:** `tools/clean_regrade.sh` + `tools/render_dataset.py` — forced-fresh, identity-verified builds (defeats the stale-binary trap, lesson 9) over a sealed battery + held-outs.
-- **The arms (patches + logs):** prompt-method arms (`*_draw*.patch`, `logs_*`), the `case-check` tool arm (`casecheck_pilot.patch`), the corrected-gate codex arm (`gate2_codex_terminated.patch`), and the Fable arms (`fable_*.patch`).
+- **The arms:** all patches in `patches/` (prompt-method `*_draw*`, the `case-check` tool arm `casecheck_pilot`, the corrected-gate codex arm `gate2_codex_terminated`, the Fable arms `fable_*`); per-arm session logs in `logs/`; grade tallies in `results/`. See `pilots/11-verus-2219/MANIFEST.md` for the full map.
 - **The clean dataset:** `clean_dataset.jsonl` / `clean_dataset.md` — 21 artifacts at fixed toolchain, every row provenance-stamped.
 - **Findings writeups:** `RESULT-corrected.md`, `MECHANISM-dissection.md`, and `worklog/FABLE_WORKLOG.md`.
 

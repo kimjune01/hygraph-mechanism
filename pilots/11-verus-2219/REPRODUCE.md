@@ -52,8 +52,8 @@ For a clean run, pull any answer-bearing notes out of the agent's reachable memo
 After the agent leaves its patch in `$VERUS_WT`:
 ```
 ( cd "$VERUS_WT" && git diff > /tmp/fable_arm.patch )
-cp /tmp/fable_arm.patch ./
-./local/clean_regrade.sh /tmp/fable-grade.jsonl fable_arm.patch
+cp /tmp/fable_arm.patch patches/
+./local/clean_regrade.sh /tmp/fable-grade.jsonl patches/fable_arm.patch
 python3 tools/render_dataset.py /tmp/fable-grade.jsonl
 ```
 The harness does a forced-fresh rebuild (the vendored `rustc_mir_build` crate does NOT rebuild on plain incremental vargo — this is the stale-binary trap; the harness defeats it by touching sources) and grades the battery + case-check. Read the result against the buckets in `RESULT-corrected.md`:
