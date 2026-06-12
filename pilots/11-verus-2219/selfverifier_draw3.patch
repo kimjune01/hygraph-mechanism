@@ -1,0 +1,310 @@
+diff --git a/source/rustc_mir_build/src/builder/expr/stmt.rs b/source/rustc_mir_build/src/builder/expr/stmt.rs
+index 66ee139..5448945 100644
+--- a/source/rustc_mir_build/src/builder/expr/stmt.rs
++++ b/source/rustc_mir_build/src/builder/expr/stmt.rs
+@@ -141,6 +141,35 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     this.cfg.start_new_block().unit()
+                 })
+             }
++            ExprKind::NeverToAny { source } => {
++                if let Some(args) = crate::verus::erased_ghost_value_args_if_any(this.thir, source) {
++                    for arg in args {
++                        block = this.stmt_expr(block, arg, statement_scope).into_block();
++                    }
++                    block.unit()
++                } else if crate::verus::erased_stmt_makes_expr_diverge(this.thir, source) {
++                    let temp = this.temp(this.tcx.types.unit, expr_span);
++                    this.expr_into_dest(Place::from(temp), block, source)
++                } else {
++                    unpack!(
++                        block = this.as_temp(
++                            block,
++                            TempLifetime {
++                                temp_lifetime: statement_scope,
++                                backwards_incompatible: None
++                            },
++                            expr_id,
++                            Mutability::Not
++                        )
++                    );
++
++                    block.unit()
++                }
++            }
++            ExprKind::Block { .. } if crate::verus::erased_stmt_makes_expr_diverge(this.thir, expr_id) => {
++                let temp = this.temp(this.tcx.types.unit, expr_span);
++                this.expr_into_dest(Place::from(temp), block, expr_id)
++            }
+             _ => {
+                 assert!(
+                     statement_scope.is_some(),
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..29ac2f6 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,11 +845,20 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref func, ref mut target, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+ 
++            let call_is_erased_ghost_value = match func {
++                Operand::Constant(func) => match func.ty().kind() {
++                    ty::FnDef(def_id, _) => crate::verus::is_erased_ghost_value_fn(*def_id),
++                    _ => false,
++                },
++                _ => false,
++            };
++
+             let ty = destination.ty(&self.local_decls, self.tcx).ty;
+             let ty_is_inhabited = ty.is_inhabited_from(
+                 self.tcx,
+@@ -876,7 +885,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     true
+                 };
+ 
+-            if !ty_is_inhabited {
++            if !ty_is_inhabited && !call_is_erased_ghost_value {
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+diff --git a/source/rustc_mir_build/src/thir/cx/block.rs b/source/rustc_mir_build/src/thir/cx/block.rs
+index f831a68..0c1b05b 100644
+--- a/source/rustc_mir_build/src/thir/cx/block.rs
++++ b/source/rustc_mir_build/src/thir/cx/block.rs
+@@ -52,13 +52,20 @@ impl<'tcx> ThirBuildCx<'tcx> {
+                 let hir_id = stmt.hir_id;
+                 let thir_stmt = match stmt.kind {
+                     hir::StmtKind::Expr(expr) | hir::StmtKind::Semi(expr) => {
++                        let expr_id = self.mirror_expr(expr);
++                        let expr_id = crate::verus::remove_never_type_from_erased_stmt(
++                            self,
++                            expr_id,
++                            expr.hir_id,
++                            expr.span,
++                        );
+                         let stmt = Stmt {
+                             kind: StmtKind::Expr {
+                                 scope: region::Scope {
+                                     local_id: hir_id.local_id,
+                                     data: region::ScopeData::Node,
+                                 },
+-                                expr: self.mirror_expr(expr),
++                                expr: expr_id,
+                             },
+                         };
+                         Some(self.thir.stmts.push(stmt))
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..1995a56 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -133,6 +133,13 @@ fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 
++pub(crate) fn is_erased_ghost_value_fn(def_id: DefId) -> bool {
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++    def_id == erasure_ctxt.erased_ghost_value_fn_def_id
++}
++
+ /// Our erasure scheme will fail if this query runs too early, before we initialize the
+ /// VerusErasureCtxt. However, there are some items where this happens
+ /// intentionally (e.g., for consts, which may be evaluated during type-checking).
+@@ -495,6 +502,190 @@ fn erased_ghost_value_remove_type_if_possible<'tcx>(
+     }
+ }
+ 
++pub(crate) fn remove_never_type_from_erased_stmt<'tcx>(
++    cx: &mut ThirBuildCx<'tcx>,
++    expr_id: ExprId,
++    hir_id: HirId,
++    span: Span,
++) -> ExprId {
++    let Some(erasure_ctxt) = cx.verus_ctxt.ctxt.clone() else {
++        return expr_id;
++    };
++    if let ExprKind::Scope { region_scope, lint_level, value } = cx.thir.exprs[expr_id].kind {
++        let new_value = remove_never_type_from_erased_stmt(cx, value, hir_id, span);
++        if new_value != value {
++            let expr = Expr {
++                temp_scope_id: cx.thir.exprs[expr_id].temp_scope_id,
++                ty: cx.thir.exprs[new_value].ty,
++                span: cx.thir.exprs[expr_id].span,
++                kind: ExprKind::Scope { region_scope, lint_level, value: new_value },
++            };
++            return cx.thir.exprs.push(expr);
++        }
++        return expr_id;
++    }
++    if let ExprKind::Use { source } = cx.thir.exprs[expr_id].kind {
++        let new_source = remove_never_type_from_erased_stmt(cx, source, hir_id, span);
++        if new_source != source {
++            let mut expr = cx.thir.exprs[expr_id].clone();
++            expr.ty = cx.thir.exprs[new_source].ty;
++            expr.kind = ExprKind::Use { source: new_source };
++            return cx.thir.exprs.push(expr);
++        }
++        return expr_id;
++    }
++    if let ExprKind::NeverToAny { source } = cx.thir.exprs[expr_id].kind {
++        if is_erased(cx, &erasure_ctxt, &cx.thir.exprs[source].kind) {
++            return erased_ghost_value_remove_type_if_possible(
++                cx,
++                &erasure_ctxt,
++                source,
++                hir_id,
++                span,
++            )
++            .unwrap_or(expr_id);
++        }
++        if erased_expr_makes_stmt_diverge(cx, &erasure_ctxt, source) {
++            let mut expr = cx.thir.exprs[source].clone();
++            expr.ty = Ty::new_tup(cx.tcx, &[]);
++            return cx.thir.exprs.push(expr);
++        }
++    }
++    if let ExprKind::Block { block } = cx.thir.exprs[expr_id].kind
++        && erased_stmt_makes_block_diverge(cx, &erasure_ctxt, block)
++    {
++        let new_block = if let Some(tail) = cx.thir.blocks[block].expr {
++            let mut block_data = cx.thir.blocks[block].clone();
++            let mut stmts = block_data.stmts.into_vec();
++            let stmt = Stmt {
++                kind: StmtKind::Expr { scope: block_data.region_scope, expr: tail },
++            };
++            stmts.push(cx.thir.stmts.push(stmt));
++            block_data.stmts = stmts.into_boxed_slice();
++            block_data.expr = None;
++            cx.thir.blocks.push(block_data)
++        } else {
++            block
++        };
++        let mut expr = cx.thir.exprs[expr_id].clone();
++        expr.ty = Ty::new_tup(cx.tcx, &[]);
++        expr.kind = ExprKind::Block { block: new_block };
++        return cx.thir.exprs.push(expr);
++    }
++    if !cx.thir.exprs[expr_id].ty.is_never()
++        || !is_erased(cx, &erasure_ctxt, &cx.thir.exprs[expr_id].kind)
++    {
++        return expr_id;
++    }
++    erased_ghost_value_remove_type_if_possible(cx, &erasure_ctxt, expr_id, hir_id, span)
++        .unwrap_or(expr_id)
++}
++
++fn erased_stmt_makes_block_diverge<'tcx>(
++    cx: &ThirBuildCx<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    block: BlockId,
++) -> bool {
++    if let Some(expr) = cx.thir.blocks[block].expr {
++        return erased_expr_makes_stmt_diverge(cx, erasure_ctxt, expr);
++    }
++    cx.thir.blocks[block].stmts.iter().any(|stmt| match cx.thir.stmts[*stmt].kind {
++        StmtKind::Expr { expr, .. } => erased_expr_makes_stmt_diverge(cx, erasure_ctxt, expr),
++        StmtKind::Let { .. } => false,
++    })
++}
++
++fn erased_expr_makes_stmt_diverge<'tcx>(
++    cx: &ThirBuildCx<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    expr: ExprId,
++) -> bool {
++    if is_erased(cx, erasure_ctxt, &cx.thir.exprs[expr].kind) {
++        return true;
++    }
++    match cx.thir.exprs[expr].kind {
++        ExprKind::NeverToAny { source } => is_erased(cx, erasure_ctxt, &cx.thir.exprs[source].kind),
++        ExprKind::Block { block } => erased_stmt_makes_block_diverge(cx, erasure_ctxt, block),
++        ExprKind::Scope { value, .. } => erased_expr_makes_stmt_diverge(cx, erasure_ctxt, value),
++        ExprKind::Use { source } => erased_expr_makes_stmt_diverge(cx, erasure_ctxt, source),
++        _ => false,
++    }
++}
++
++pub(crate) fn erased_ghost_value_args<'tcx>(
++    thir: &thir::Thir<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    expr: ExprId,
++) -> Option<Vec<ExprId>> {
++    match thir.exprs[expr].kind {
++        ExprKind::Scope { value, .. } => erased_ghost_value_args(thir, erasure_ctxt, value),
++        ExprKind::NeverToAny { source } => erased_ghost_value_args(thir, erasure_ctxt, source),
++        ExprKind::Call { fun, ref args, .. } => match thir.exprs[fun].ty.kind() {
++            TyKind::FnDef(fn_def_id, _) if *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id => {
++                let tup_arg = args[0];
++                match &thir.exprs[tup_arg].kind {
++                    ExprKind::Tuple { fields } => Some(fields.clone().into_vec()),
++                    _ => Some(vec![]),
++                }
++            }
++            _ => None,
++        },
++        _ => None,
++    }
++}
++
++pub(crate) fn erased_ghost_value_args_if_any<'tcx>(
++    thir: &thir::Thir<'tcx>,
++    expr: ExprId,
++) -> Option<Vec<ExprId>> {
++    let erasure_ctxt = get_verus_erasure_ctxt_option()?;
++    erased_ghost_value_args(thir, &erasure_ctxt, expr)
++}
++
++pub(crate) fn erased_stmt_makes_expr_diverge<'tcx>(
++    thir: &thir::Thir<'tcx>,
++    expr: ExprId,
++) -> bool {
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++    erased_stmt_makes_expr_diverge_rec(thir, &erasure_ctxt, expr)
++}
++
++fn erased_stmt_makes_expr_diverge_rec<'tcx>(
++    thir: &thir::Thir<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    expr: ExprId,
++) -> bool {
++    if erased_ghost_value_args(thir, erasure_ctxt, expr).is_some() {
++        return true;
++    }
++    match thir.exprs[expr].kind {
++        ExprKind::Scope { value, .. } => {
++            erased_stmt_makes_expr_diverge_rec(thir, erasure_ctxt, value)
++        }
++        ExprKind::NeverToAny { source } => {
++            erased_stmt_makes_expr_diverge_rec(thir, erasure_ctxt, source)
++        }
++        ExprKind::Use { source } => {
++            erased_stmt_makes_expr_diverge_rec(thir, erasure_ctxt, source)
++        }
++        ExprKind::Block { block } => {
++            if let Some(expr) = thir.blocks[block].expr {
++                erased_stmt_makes_expr_diverge_rec(thir, erasure_ctxt, expr)
++            } else {
++                thir.blocks[block].stmts.iter().any(|stmt| match thir.stmts[*stmt].kind {
++                    StmtKind::Expr { expr, .. } => {
++                        erased_stmt_makes_expr_diverge_rec(thir, erasure_ctxt, expr)
++                    }
++                    StmtKind::Let { .. } => false,
++                })
++            }
++        }
++        _ => false,
++    }
++}
++
+ /// Is the given THIR node the result of erasure?
+ pub(crate) fn is_erased<'tcx>(
+     cx: &ThirBuildCx<'tcx>,

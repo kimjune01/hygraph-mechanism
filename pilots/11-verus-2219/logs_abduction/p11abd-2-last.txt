@@ -1,0 +1,33 @@
+VERDICT: reported program now correctly REJECTED.
+
+Generalization probes:
+- `/tmp/p11abd-scratch/reported.rs`: REJECTED, `error[E0382]: use of moved value: t`
+- `/tmp/p11abd-scratch/move_then_let.rs`: REJECTED, `error[E0382]: use of moved value: t`
+- `/tmp/p11abd-scratch/borrow_after_move.rs`: REJECTED, `error[E0382]: borrow of moved value: t`
+
+Over-rejection probe:
+- `/tmp/p11abd-scratch/valid_real_diverge.rs`: VERIFIED, `verification results:: 2 verified, 0 errors` with unreachable-code warning only
+
+Regression:
+- `vargo nextest` unavailable: `cargo-nextest` not installed
+- Ran `vargo test -p rust_verify_test --vstd-no-verify --test lifetime --test mut_refs --test mut_refs_old --test mut_refs_modes --test mut_refs_patterns --test mut_refs_time_travel --test mut_refs_temporaries --test mut_refs_unions --test mut_refs_closures --test mut_refs_libs`
+- Result: PASS, 453 passed, 12 ignored, 0 failed
+
+Abduced predicate `P`:
+- Deleting a post-call edge is sound only when the call’s non-returning behavior is semantically real in the checking MIR, not merely an artifact of Verus erasing ghost/spec code to `erased_ghost_value`.
+
+Changed:
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - added `is_erased_ghost_value_fn`
+
+Abduction log:
+- `/tmp/p11abd-scratch/ABDUCTION.md`
+
+`git -C /Users/junekim/Documents/verus-p11 diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs        | 10 ++++++++--
+ source/rustc_mir_build_additional_files/verus.rs |  7 +++++++
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+```

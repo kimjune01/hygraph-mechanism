@@ -1,0 +1,33 @@
+VERDICT: reported program now correctly REJECTED.
+
+Generalization probes:
+- `/tmp/p11abd-scratch/reported.rs`: REJECTED, `error[E0382]: use of moved value: t`.
+- `/tmp/p11abd-scratch/variant_local_never.rs`: REJECTED, `error[E0382]: use of moved value: t`.
+- `/tmp/p11abd-scratch/variant_named_spec_never.rs`: REJECTED earlier by independent `never-to-any coercion is not allowed in spec mode`.
+- `/tmp/p11abd-scratch/variant_block_never.rs`: REJECTED earlier by independent `never-to-any coercion is not allowed in spec mode`.
+
+Over-rejection probe:
+- `/tmp/p11abd-scratch/valid_real_diverge.rs`: VERIFIED, `verification results:: 2 verified, 0 errors`; only an unreachable-code warning.
+
+Regression:
+- PASS: `vargo test --release -p rust_verify_test --test lifetime`
+- PASS: `mut_refs`, `mut_refs_closures`, `mut_refs_libs`, `mut_refs_loops`, `mut_refs_modes`, `mut_refs_old`, `mut_refs_patterns`, `mut_refs_slices_arrays`, `mut_refs_temporaries`, `mut_refs_time_travel`, `mut_refs_unions`, `mutable_params`, `refs`
+
+Abduced predicate `P`:
+- Delete a post-call continuation edge only when the call is semantically non-returning in the checked program; Verus synthetic `erased_ghost_value::<_, T>` calls are not evidence of non-returning control flow even when `T` is uninhabited.
+
+Changed source:
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - Added `is_erased_ghost_value_call_func`.
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - Updated `Builder::lint_and_remove_uninhabited` to retain the return edge for synthetic erased ghost value calls.
+
+Abduction log:
+- `/tmp/p11abd-scratch/ABDUCTION.md`
+
+`git diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs        |  5 +++--
+ source/rustc_mir_build_additional_files/verus.rs | 19 ++++++++++++++++++-
+ 2 files changed, 21 insertions(+), 3 deletions(-)
+```

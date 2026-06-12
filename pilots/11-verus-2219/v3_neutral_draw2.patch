@@ -1,0 +1,59 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..ff626ff 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,11 +845,16 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref func, ref mut target, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+ 
++            if crate::verus::is_erased_ghost_value_operand(func) {
++                continue;
++            }
++
+             let ty = destination.ty(&self.local_decls, self.tcx).ty;
+             let ty_is_inhabited = ty.is_inhabited_from(
+                 self.tcx,
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..63aa58c 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -8,7 +8,7 @@ use rustc_hir::def::Res;
+ use rustc_hir::def_id::{DefId, LocalDefId};
+ use rustc_middle::hir::place::{Place, Projection, ProjectionKind};
+ use rustc_middle::middle::region;
+-use rustc_middle::mir::FakeReadCause;
++use rustc_middle::mir::{Const, ConstValue, FakeReadCause, Operand};
+ use rustc_middle::thir;
+ use rustc_middle::thir::{
+     AdtExprBase, Arm, ArmId, Block, BlockId, BlockSafety, Expr, ExprId, ExprKind, LocalVarId, Pat,
+@@ -129,6 +129,23 @@ fn get_verus_erasure_ctxt() -> Arc<VerusErasureCtxt> {
+         .clone()
+ }
+ 
++pub fn is_erased_ghost_value_operand<'tcx>(func: &Operand<'tcx>) -> bool {
++    let Operand::Constant(func) = func else {
++        return false;
++    };
++    if !matches!(func.const_, Const::Val(ConstValue::ZeroSized, _)) {
++        return false;
++    }
++    let TyKind::FnDef(fn_def_id, _) = func.ty().kind() else {
++        return false;
++    };
++    VERUS_ERASURE_CTXT
++        .read()
++        .unwrap()
++        .as_ref()
++        .is_some_and(|ctxt| *fn_def_id == ctxt.erased_ghost_value_fn_def_id)
++}
++
+ fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }

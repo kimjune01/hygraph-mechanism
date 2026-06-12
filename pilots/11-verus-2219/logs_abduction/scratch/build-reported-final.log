@@ -1,0 +1,20 @@
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+   Compiling rustc_mir_build v0.0.0 (/Users/junekim/Documents/verus-p11/source/rustc_mir_build)
+   Compiling rust_verify v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify)
+    Finished `release` profile [optimized] target(s) in 18.47s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.08s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.09s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mvstd outdated, rebuilding[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running `target/release/vstd_build /Users/junekim/Documents/verus-p11/source/target-verus/release --release`
+verification results:: 1490 verified, 0 errors

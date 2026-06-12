@@ -1,0 +1,33 @@
+VERDICT: reported program now correctly REJECTED.
+
+Generalization probes:
+- `reported.rs`: REJECTED, `error[E0382]: use of moved value: t`
+- `direct_never_stmt.rs`: REJECTED, `error[E0382]`
+- `unsound_other_tracked_arg.rs`: REJECTED, `error[E0382]`
+- `unsound_let_never.rs`: REJECTED, `error[E0382]`
+
+Over-rejection probes:
+- `valid_ghost_never_arg.rs`: VERIFIED, `2 verified, 0 errors`
+- `valid_real_diverge.rs`: VERIFIED, `2 verified, 0 errors` with expected unreachable warning
+
+Regression:
+- `vargo test -p rust_verify_test --test lifetime`
+- Result: `94 passed; 0 failed`
+
+Abduced predicate `P`: deleting a post-call continuation edge is sound only when the call is a real source-level non-returning computation, not Verus’s synthetic `erased_ghost_value` witness introduced by ghost erasure even if its type is `!`.
+
+Changed:
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - added `is_erased_ghost_value_fn`
+
+Abduction log:
+- `/tmp/p11abd-scratch/ABDUCTION.md`
+
+`git diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/mod.rs        | 9 ++++++++-
+ source/rustc_mir_build_additional_files/verus.rs | 7 +++++++
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+```

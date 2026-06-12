@@ -1,0 +1,477 @@
+diff --git a/source/rust_verify/src/fn_call_to_vir.rs b/source/rust_verify/src/fn_call_to_vir.rs
+index 6eab2f8..032cc5f 100644
+--- a/source/rust_verify/src/fn_call_to_vir.rs
++++ b/source/rust_verify/src/fn_call_to_vir.rs
+@@ -2163,7 +2163,11 @@ fn extract_ensures<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure {
++                    erase_body: true,
++                    ret_spec: true,
++                    keep_uninhabited_return_edge: true,
++                },
+             );
+ 
+             let typs: Vec<Typ> = closure_param_typs(bctx, expr)?;
+@@ -2205,7 +2209,11 @@ fn extract_quant<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure {
++                    erase_body: true,
++                    ret_spec: true,
++                    keep_uninhabited_return_edge: true,
++                },
+             );
+ 
+             let body = tcx.hir_body(closure.body);
+@@ -2267,7 +2275,11 @@ fn extract_assert_forall_by<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure {
++                    erase_body: true,
++                    ret_spec: true,
++                    keep_uninhabited_return_edge: true,
++                },
+             );
+ 
+             let body = tcx.hir_body(closure.body);
+@@ -2327,7 +2339,11 @@ fn extract_choose<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure {
++                    erase_body: true,
++                    ret_spec: true,
++                    keep_uninhabited_return_edge: true,
++                },
+             );
+ 
+             let closure_body = tcx.hir_body(closure.body);
+diff --git a/source/rust_verify/src/rust_to_vir_expr.rs b/source/rust_verify/src/rust_to_vir_expr.rs
+index 819bbb0..eb384a2 100644
+--- a/source/rust_verify/src/rust_to_vir_expr.rs
++++ b/source/rust_verify/src/rust_to_vir_expr.rs
+@@ -3811,7 +3811,14 @@ pub(crate) fn closure_to_vir<'tcx>(
+         assert!(ensure.1.len() == 0);
+ 
+         let exprx = if is_spec_fn {
+-            bctx.ctxt.push_body_erasure(*def_id, BodyErasure { erase_body: true, ret_spec: true });
++            bctx.ctxt.push_body_erasure(
++                *def_id,
++                BodyErasure {
++                    erase_body: true,
++                    ret_spec: true,
++                    keep_uninhabited_return_edge: true,
++                },
++            );
+ 
+             if require.len() > 0 || ensure.0.len() > 0 {
+                 return err_span(
+@@ -3829,6 +3836,7 @@ pub(crate) fn closure_to_vir<'tcx>(
+                         None => false,
+                         Some((_, ret_mode)) => ret_mode == Mode::Spec,
+                     },
++                    keep_uninhabited_return_edge: proof_fn_modes.is_some(),
+                 },
+             );
+ 
+diff --git a/source/rust_verify/src/rust_to_vir_func.rs b/source/rust_verify/src/rust_to_vir_func.rs
+index e663574..3b7a7f8 100644
+--- a/source/rust_verify/src/rust_to_vir_func.rs
++++ b/source/rust_verify/src/rust_to_vir_func.rs
+@@ -1988,7 +1988,11 @@ pub(crate) fn check_item_fn<'tcx>(
+ 
+     ctxt.push_body_erasure(
+         id.expect_local(),
+-        BodyErasure { erase_body: mode == Mode::Spec, ret_spec: ret_mode == Mode::Spec },
++        BodyErasure {
++            erase_body: mode == Mode::Spec,
++            ret_spec: ret_mode == Mode::Spec,
++            keep_uninhabited_return_edge: mode != Mode::Exec,
++        },
+     );
+ 
+     let mut func = FunctionX {
+@@ -2725,7 +2729,11 @@ pub(crate) fn check_item_const_or_static<'tcx>(
+ 
+     ctxt.push_body_erasure(
+         id.expect_local(),
+-        BodyErasure { erase_body: body_mode == Mode::Spec, ret_spec: ret_mode == Mode::Spec },
++        BodyErasure {
++            erase_body: body_mode == Mode::Spec,
++            ret_spec: ret_mode == Mode::Spec,
++            keep_uninhabited_return_edge: body_mode != Mode::Exec,
++        },
+     );
+ 
+     let mut functionx = FunctionX {
+diff --git a/source/rustc_mir_build/src/builder/expr/as_temp.rs b/source/rustc_mir_build/src/builder/expr/as_temp.rs
+index d8ac19e..b6d7a05 100644
+--- a/source/rustc_mir_build/src/builder/expr/as_temp.rs
++++ b/source/rustc_mir_build/src/builder/expr/as_temp.rs
+@@ -5,12 +5,80 @@ use rustc_hir::HirId;
+ use rustc_middle::middle::region::{Scope, ScopeData, TempLifetime};
+ use rustc_middle::mir::*;
+ use rustc_middle::thir::*;
++use rustc_middle::ty::TyKind;
++use rustc_span::DUMMY_SP;
+ use tracing::{debug, instrument};
+ 
+ use crate::builder::scope::DropKind;
+ use crate::builder::{BlockAnd, BlockAndExtension, Builder};
+ 
+ impl<'a, 'tcx> Builder<'a, 'tcx> {
++    pub(crate) fn is_verus_erased_ghost_value_call(&self, expr_id: ExprId) -> bool {
++        let ExprKind::Call { fun, .. } = self.thir[expr_id].kind else {
++            return false;
++        };
++        let Some(erasure_ctxt) = crate::verus::get_verus_erasure_ctxt_option() else {
++            return false;
++        };
++        let TyKind::FnDef(fn_def_id, _) = self.thir[fun].ty.kind() else {
++            return false;
++        };
++        *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id
++    }
++
++    pub(crate) fn ty_is_visibly_uninhabited(&self, ty: rustc_middle::ty::Ty<'tcx>) -> bool {
++        !ty.is_inhabited_from(
++            self.tcx,
++            self.parent_module,
++            self.infcx.typing_env(self.param_env),
++        )
++    }
++
++    pub(crate) fn eval_verus_erased_ghost_value_dep(
++        &mut self,
++        mut block: BasicBlock,
++        temp_lifetime: TempLifetime,
++        expr_id: ExprId,
++    ) -> BasicBlock {
++        let expr = &self.thir[expr_id];
++        let source_info = self.source_info(expr.span);
++        if let ExprKind::Scope { region_scope, lint_level, value } = expr.kind {
++            return self.in_scope((region_scope, source_info), lint_level, |this| {
++                this.eval_verus_erased_ghost_value_dep(block, temp_lifetime, value).unit()
++            }).into_block();
++        }
++
++        if self.is_verus_erased_ghost_value_call(expr_id) {
++            let ExprKind::Call { ref args, .. } = self.thir[expr_id].kind else {
++                unreachable!();
++            };
++            let args = args.clone();
++            return self.eval_verus_erased_ghost_value_args(block, temp_lifetime, &args);
++        }
++
++        unpack!(block = self.as_temp(block, temp_lifetime, expr_id, Mutability::Mut));
++        block
++    }
++
++    pub(crate) fn eval_verus_erased_ghost_value_args(
++        &mut self,
++        mut block: BasicBlock,
++        temp_lifetime: TempLifetime,
++        args: &[ExprId],
++    ) -> BasicBlock {
++        for arg in args.iter().copied() {
++            let ExprKind::Tuple { fields } = &self.thir[arg].kind else {
++                block = self.eval_verus_erased_ghost_value_dep(block, temp_lifetime, arg);
++                continue;
++            };
++            let fields = fields.clone();
++            for field in fields.iter().copied() {
++                block = self.eval_verus_erased_ghost_value_dep(block, temp_lifetime, field);
++            }
++        }
++        block
++    }
++
+     /// Compile `expr` into a fresh temporary. This is used when building
+     /// up rvalues so as to freeze the value that will be consumed.
+     pub(crate) fn as_temp(
+@@ -94,6 +162,81 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+         }
+         let temp_place = Place::from(temp);
+ 
++        if this.is_verus_erased_ghost_value_call(expr_id) {
++            let ExprKind::Call { ref args, fn_span, .. } = this.thir[expr_id].kind else {
++                unreachable!();
++            };
++            let args = args.clone();
++            block = this.eval_verus_erased_ghost_value_args(block, temp_lifetime, &args);
++            if this.ty_is_visibly_uninhabited(expr_ty) {
++                this.cfg.push(block, Statement::new(source_info, StatementKind::StorageLive(temp)));
++                this.cfg.push_assign(
++                    block,
++                    source_info,
++                    temp_place,
++                    Rvalue::Use(Operand::Constant(Box::new(ConstOperand {
++                        span: source_info.span,
++                        user_ty: None,
++                        const_: Const::zero_sized(expr_ty),
++                    }))),
++                );
++                if let Some(temp_lifetime) = temp_lifetime.temp_lifetime {
++                    this.schedule_drop(expr_span, temp_lifetime, temp, DropKind::Storage);
++                }
++                return block.and(temp);
++            }
++
++            this.cfg.push(block, Statement::new(source_info, StatementKind::StorageLive(temp)));
++            if let Some(temp_lifetime) = temp_lifetime.temp_lifetime {
++                this.schedule_drop(expr_span, temp_lifetime, temp, DropKind::Storage);
++            }
++
++            let Some(erasure_ctxt) = crate::verus::get_verus_erasure_ctxt_option() else {
++                unreachable!();
++            };
++            let unit_temp = this.temp(this.tcx.types.unit, expr_span);
++            this.cfg.push_assign_unit(block, source_info, unit_temp, this.tcx);
++            let func = Operand::function_handle(
++                this.tcx,
++                erasure_ctxt.erased_ghost_value_fn_def_id,
++                [this.tcx.types.unit.into(), expr_ty.into()],
++                expr_span,
++            );
++            let success = this.cfg.start_new_block();
++            this.cfg.terminate(
++                block,
++                source_info,
++                TerminatorKind::Call {
++                    func,
++                    args: [rustc_span::source_map::Spanned {
++                        node: Operand::Move(unit_temp),
++                        span: DUMMY_SP,
++                    }]
++                    .into(),
++                    destination: temp_place,
++                    target: Some(success),
++                    unwind: UnwindAction::Continue,
++                    call_source: CallSource::Misc,
++                    fn_span,
++                },
++            );
++            this.diverge_from(block);
++
++            if let Some(temp_lifetime) = temp_lifetime.temp_lifetime {
++                this.schedule_drop(expr_span, temp_lifetime, temp, DropKind::Value);
++            }
++
++            if let Some(backwards_incompatible) = temp_lifetime.backwards_incompatible {
++                this.schedule_backwards_incompatible_drop(
++                    expr_span,
++                    backwards_incompatible,
++                    temp,
++                );
++            }
++
++            return success.and(temp);
++        }
++
+         match expr.kind {
+             // Don't bother with StorageLive and Dead for these temporaries,
+             // they are never assigned.
+diff --git a/source/rustc_mir_build/src/builder/expr/into.rs b/source/rustc_mir_build/src/builder/expr/into.rs
+index f595cfc..4f97d45 100644
+--- a/source/rustc_mir_build/src/builder/expr/into.rs
++++ b/source/rustc_mir_build/src/builder/expr/into.rs
+@@ -366,41 +366,108 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 })
+             }
+             ExprKind::Call { ty: _, fun, ref args, from_hir_call, fn_span } => {
+-                let fun = unpack!(block = this.as_local_operand(block, fun));
+-                let args: Box<[_]> = args
+-                    .into_iter()
+-                    .copied()
+-                    .map(|arg| Spanned {
+-                        node: unpack!(block = this.as_local_call_operand(block, arg)),
+-                        span: this.thir.exprs[arg].span,
+-                    })
+-                    .collect();
++                if this.is_verus_erased_ghost_value_call(expr_id) {
++                    let args = args.clone();
++                    if this.ty_is_visibly_uninhabited(expr.ty) {
++                        block = this.eval_verus_erased_ghost_value_args(
++                            block,
++                            this.local_temp_lifetime(),
++                            &args,
++                        );
++                        this.cfg.push_assign(
++                            block,
++                            source_info,
++                            destination,
++                            Rvalue::Use(Operand::Constant(Box::new(ConstOperand {
++                                span: source_info.span,
++                                user_ty: None,
++                                const_: Const::zero_sized(expr.ty),
++                            }))),
++                        );
++                        block.unit()
++                    } else {
++                        let temp = unpack!(
++                        block = this.as_temp(
++                            block,
++                            this.local_temp_lifetime(),
++                            expr_id,
++                            Mutability::Mut,
++                        )
++                        );
++                        this.cfg.push_assign(
++                            block,
++                            source_info,
++                            destination,
++                            Rvalue::Use(Operand::Move(Place::from(temp))),
++                        );
++                        block.unit()
++                    }
++                } else if this.ty_is_visibly_uninhabited(expr.ty)
++                    && this.is_verus_erased_ghost_value_call(fun)
++                {
++                    block = this.eval_verus_erased_ghost_value_dep(
++                        block,
++                        this.local_temp_lifetime(),
++                        fun,
++                    );
++                    for arg in args.iter().copied() {
++                        unpack!(
++                            block = this.as_temp(
++                                block,
++                                this.local_temp_lifetime(),
++                                arg,
++                                Mutability::Mut,
++                            )
++                        );
++                    }
++                    this.cfg.push_assign(
++                        block,
++                        source_info,
++                        destination,
++                        Rvalue::Use(Operand::Constant(Box::new(ConstOperand {
++                            span: source_info.span,
++                            user_ty: None,
++                            const_: Const::zero_sized(expr.ty),
++                        }))),
++                    );
++                    block.unit()
++                } else {
++                    let fun = unpack!(block = this.as_local_operand(block, fun));
++                    let args: Box<[_]> = args
++                        .into_iter()
++                        .copied()
++                        .map(|arg| Spanned {
++                            node: unpack!(block = this.as_local_call_operand(block, arg)),
++                            span: this.thir.exprs[arg].span,
++                        })
++                        .collect();
+ 
+-                let success = this.cfg.start_new_block();
++                    let success = this.cfg.start_new_block();
+ 
+-                this.record_operands_moved(&args);
++                    this.record_operands_moved(&args);
+ 
+-                debug!("expr_into_dest: fn_span={:?}", fn_span);
++                    debug!("expr_into_dest: fn_span={:?}", fn_span);
+ 
+-                this.cfg.terminate(
+-                    block,
+-                    source_info,
+-                    TerminatorKind::Call {
+-                        func: fun,
+-                        args,
+-                        unwind: UnwindAction::Continue,
+-                        destination,
+-                        target: Some(success),
+-                        call_source: if from_hir_call {
+-                            CallSource::Normal
+-                        } else {
+-                            CallSource::OverloadedOperator
++                    this.cfg.terminate(
++                        block,
++                        source_info,
++                        TerminatorKind::Call {
++                            func: fun,
++                            args,
++                            unwind: UnwindAction::Continue,
++                            destination,
++                            target: Some(success),
++                            call_source: if from_hir_call {
++                                CallSource::Normal
++                            } else {
++                                CallSource::OverloadedOperator
++                            },
++                            fn_span,
+                         },
+-                        fn_span,
+-                    },
+-                );
+-                this.diverge_from(block);
+-                success.unit()
++                    );
++                    this.diverge_from(block);
++                    success.unit()
++                }
+             }
+             ExprKind::ByUse { expr, span } => {
+                 let place = unpack!(block = this.as_place(block, expr));
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..1611071 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,7 +845,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref mut target, destination, ref func, .. } = term.kind else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+@@ -877,6 +877,18 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 };
+ 
+             if !ty_is_inhabited {
++                if let Some(erasure_ctxt) = crate::verus::get_verus_erasure_ctxt_option()
++                    && let Operand::Constant(func_const) = func
++                    && let ty::FnDef(def_id, _) = func_const.ty().kind()
++                    && let Some(local_def_id) = def_id.as_local()
++                    && erasure_ctxt
++                        .bodies
++                        .get(&local_def_id)
++                        .is_some_and(|body| body.keep_uninhabited_return_edge)
++                {
++                    continue;
++                }
++
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..3b6d8d3 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -68,6 +68,7 @@ pub enum CallErasure {
+ pub struct BodyErasure {
+     pub erase_body: bool,
+     pub ret_spec: bool,
++    pub keep_uninhabited_return_edge: bool,
+ }
+ 
+ /// Global context with all information across the krate.
+@@ -129,7 +130,7 @@ fn get_verus_erasure_ctxt() -> Arc<VerusErasureCtxt> {
+         .clone()
+ }
+ 
+-fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
++pub(crate) fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 

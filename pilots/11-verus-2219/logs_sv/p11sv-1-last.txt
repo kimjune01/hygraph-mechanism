@@ -1,0 +1,55 @@
+VERDICT: reported program now correctly REJECTED.
+
+- Reproducer: `error[E0382]: use of moved value: t`
+- Generator: `/tmp/p11sv-scratch/adversarial_generator.py`
+- Generator report: `/tmp/p11sv-scratch/generator_report.txt`
+- Final generator result: `cases=72 mismatches=0`
+- Regression: `vargo test -p rust_verify_test --test lifetime` passed, `94 passed; 0 failed`
+
+Changed files/functions:
+
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - `get_verus_erasure_ctxt_option` visibility changed to `pub(crate)`
+
+Root cause/fix:
+
+Verus erases ghost/spec expressions into synthetic calls to `erased_ghost_value::<Args, T>`. When `T` was uninhabited, Rust MIR’s `lint_and_remove_uninhabited` treated that synthetic call like a genuinely diverging call and removed its continuation edge. That made reachable post-call code invisible to MIR borrow/linearity checking. The fix keeps continuation edges for Verus’s synthetic `erased_ghost_value` calls by detecting the MIR call operand’s `FnDef` and skipping uninhabited-edge pruning only for that synthetic function. Real diverging calls still prune normally.
+
+Perturbation variants:
+
+All combinations of:
+
+- Value/call shapes:
+  - `sink_never(arbitrary())`
+  - `sink_generic::<!>(arbitrary())`
+  - `sink_generic::<(!,)>(arbitrary())`
+  - `sink_pair((arbitrary(),))`
+  - `sink_pair(arbitrary())`
+  - `sink_generic::<Result<!, !>>(arbitrary())`
+  - `sink_generic::<Result<!, ()>>(arbitrary())`
+  - `sink_generic::<Option<!>>(arbitrary())`
+- Resource shapes:
+  - generic tracked `T`
+  - tracked struct `Token`
+  - tracked tuple `(Token, Token)`
+- Postconditions:
+  - double consume: REJECT
+  - single consume: ACCEPT
+  - `return;` then double consume: ACCEPT
+
+Final verdict for every generated combination: expected verdict matched actual verdict.
+
+Counterexamples found during generator development:
+
+- Initial broad generator included invalid Verus programs using empty enums and `!` forms that independently trigger `never-to-any coercion is not allowed in spec mode`.
+- Corrected generator removed invalid source forms; no source-code re-fix was needed after the initial root fix.
+
+`git diff --stat`:
+
+```text
+ source/rustc_mir_build/src/builder/mod.rs        | 10 +++++++++-
+ source/rustc_mir_build_additional_files/verus.rs |  2 +-
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+```

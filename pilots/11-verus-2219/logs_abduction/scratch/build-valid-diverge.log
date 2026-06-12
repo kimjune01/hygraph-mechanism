@@ -1,0 +1,21 @@
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Blocking waiting for file lock on artifact directory
+    Finished `release` profile [optimized] target(s) in 0.18s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Blocking waiting for file lock on artifact directory
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Blocking waiting for file lock on artifact directory
+    Finished `release` profile [optimized] target(s) in 0.06s
+
+thread 'main' (33885628) panicked at src/commands/build.rs:276:44:
+called `Result::unwrap()` on an `Err` value: Os { code: 66, kind: DirectoryNotEmpty, message: "Directory not empty" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

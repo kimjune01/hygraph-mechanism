@@ -1,0 +1,58 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..dbc1442 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,7 +845,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref func, ref mut target, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+@@ -876,7 +877,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     true
+                 };
+ 
+-            if !ty_is_inhabited {
++            if !ty_is_inhabited && !is_verus_erased_ghost_value_call(func) {
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+@@ -1285,6 +1286,16 @@ pub(crate) fn parse_float_into_scalar(
+     }
+ }
+ 
++fn is_verus_erased_ghost_value_call<'tcx>(func: &Operand<'tcx>) -> bool {
++    let Operand::Constant(func) = func else {
++        return false;
++    };
++    let ty::FnDef(def_id, _) = func.const_.ty().kind() else {
++        return false;
++    };
++    crate::verus::is_erased_ghost_value_fn_def_id(*def_id)
++}
++
+ ///////////////////////////////////////////////////////////////////////////
+ // Builder methods are broken up into modules, depending on what kind
+ // of thing is being lowered. Note that they use the `unpack` macro
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..42dc90e 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -133,6 +133,13 @@ fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 
++pub(crate) fn is_erased_ghost_value_fn_def_id(def_id: DefId) -> bool {
++    matches!(
++        get_verus_erasure_ctxt_option(),
++        Some(erasure_ctxt) if erasure_ctxt.erased_ghost_value_fn_def_id == def_id
++    )
++}
++
+ /// Our erasure scheme will fail if this query runs too early, before we initialize the
+ /// VerusErasureCtxt. However, there are some items where this happens
+ /// intentionally (e.g., for consts, which may be evaluated during type-checking).

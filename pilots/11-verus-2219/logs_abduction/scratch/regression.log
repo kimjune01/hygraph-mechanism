@@ -1,0 +1,704 @@
+RUN lifetime
+   Compiling proc-macro2 v1.0.101
+   Compiling toml_parser v1.0.4
+   Compiling toml v0.9.8
+   Compiling quote v1.0.40
+   Compiling syn v1.0.109
+   Compiling syn v2.0.101
+   Compiling proc-macro-error-attr v1.0.4
+   Compiling proc-macro-error v1.0.4
+   Compiling duplicate v1.0.0
+   Compiling synstructure v0.13.2
+   Compiling serde_derive v1.0.228
+   Compiling futures-macro v0.3.31
+   Compiling clap_derive v4.5.49
+   Compiling strum_macros v0.26.4
+   Compiling bitmask-enum v2.2.5
+   Compiling vir-macros v0.1.0 (/Users/junekim/Documents/verus-p11/source/vir_macros)
+   Compiling rust_verify_test_macros v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test_macros)
+   Compiling futures-util v0.3.31
+   Compiling strum v0.26.3
+   Compiling clap v4.5.53
+   Compiling serde v1.0.228
+   Compiling num-bigint v0.4.6
+   Compiling futures-executor v0.3.31
+   Compiling futures v0.3.31
+   Compiling wasm-timer v0.2.5
+   Compiling num-rational v0.4.2
+   Compiling num v0.4.3
+   Compiling smt-scope v0.1.7
+   Compiling air v0.1.0 (/Users/junekim/Documents/verus-p11/source/air)
+   Compiling vir v0.1.0 (/Users/junekim/Documents/verus-p11/source/vir)
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 27.38s
+     Running tests/lifetime.rs (target/release/deps/lifetime-145141a3eb50dbcb)
+
+running 94 tests
+test arc_with_tracked_issue870 ... FAILED
+test assign_twice ... FAILED
+test assign_to_ghost_place_of_nonghost_local2 ... FAILED
+test assign_twice_no_lifetime ... FAILED
+test array_as_field_and_receiver_issue1604 ... FAILED
+test assign_to_ghost_place_of_nonghost_local3 ... FAILED
+test assign_to_ghost_place_of_nonghost_local4_issue1298 ... FAILED
+test assign_to_ghost_place_of_nonghost_local ... FAILED
+test borrow_local_ok ... FAILED
+test borrow_tracked_twice ... FAILED
+test borrow_local_twice ... FAILED
+test borrow_twice ... FAILED
+test borrow_tracked_twice_ok ... FAILED
+test box_with_tracked_issue870 ... FAILED
+test consts_issue1791 ... FAILED
+test consume_fields_ok ... FAILED
+test consume_tracked_twice ... FAILED
+test consume_once ... FAILED
+test consume_twice_exp ... FAILED
+test consume_twice_call ... FAILED
+test consume_twice_fields ... FAILED
+test consume_twice_field_struct ... FAILED
+test consume_twice_else ... FAILED
+test consume_twice ... FAILED
+test consume_twice_if ... FAILED
+test consume_twice_if_return ... FAILED
+test consume_twice_get ... FAILED
+test consume_twice_match ... FAILED
+test consume_twice_via_assign ... FAILED
+test consume_twice_is ... FAILED
+test consume_twice_via_args ... FAILED
+test consume_twice_via_return ... FAILED
+test consume_twice_via_return_pair ... FAILED
+test consume_twice_via_return_struct ... FAILED
+test consume_twice_via_spec_args ... FAILED
+test consume_twice_via_temp ... FAILED
+test derefs_issue1971 ... FAILED
+test derefs_lifetime2 ... FAILED
+test derefs_lifetime ... FAILED
+test dst_fields ... FAILED
+test exec_struct_ghost_fields ... FAILED
+test exec_struct_ghost_fields_2 ... FAILED
+test exec_struct_ghost_fields_fn_style ... FAILED
+test exec_struct_tracked_fields ... FAILED
+test generic_fn_value_issue1763 ... FAILED
+test implicit_deref_in_reciever_issue1243 ... FAILED
+test exec_struct_tracked_fields_2 ... FAILED
+test index_with_extra_ref_issue1009 ... FAILED
+test if_branch_uninit ... FAILED
+test exec_struct_tracked_fields_fn_style ... FAILED
+test external_body_that_uses_external_structs ... FAILED
+test lifetime_bounds_proof ... FAILED
+test lifetime_bounds_exec ... FAILED
+test lifetime_checking_in_ghost ... FAILED
+test lifetime_checking_in_array_index ... FAILED
+test lifetime_copy_fail ... FAILED
+test lifetime_multiple_anonymous_names ... FAILED
+test lifetime_spec_const ... FAILED
+test lifetime_copy_succeed ... FAILED
+test rc_with_tracked_issue870 ... FAILED
+test regression_issue1296 ... FAILED
+test match_branch_uninit ... FAILED
+test regression_issue959 ... FAILED
+test regression_issue1083 ... FAILED
+test regression_issue835 ... FAILED
+test moved_value_via_at_patterns ... FAILED
+test regression_issue959_fails ... FAILED
+test return_wrong_lifetime1 ... FAILED
+test spec_fn_call_fn_arg_proof_code ... FAILED
+test test_ghost_at_assignment_mut_check_issue424 ... FAILED
+test test_ghost_at_assignment_double_assignment ... FAILED
+test test_specification_on_external_function ... FAILED
+test return_wrong_lifetime2 ... FAILED
+test test_no_lifetime_mut_check ... FAILED
+test tracked_borrow_mut_assignment_fail ... FAILED
+test tracked_borrow_mut_assignment ... FAILED
+test tracked_borrow_unit_issue1279 ... FAILED
+test tracked_empty_union_uninitialized_1 ... FAILED
+test tracked_empty_union_uninitialized_2 ... FAILED
+test tracked_empty_union_uninitialized_4 ... FAILED
+test tracked_in_ghost1 ... FAILED
+test tracked_empty_union_uninitialized_3 ... FAILED
+test tracked_in_ghost2 ... FAILED
+test tracked_in_ghost3 ... FAILED
+test tracked_is_not_copy_just_because_type_param_is_clone ... FAILED
+test tracked_new_issue870 ... FAILED
+test tracked_static_ref_checks_outlives ... FAILED
+test two_phase_with_overloaded_compound_assignment_operator ... FAILED
+test tracked_is_not_clone_just_because_type_param_is_clone ... FAILED
+test tracked_is_copy_if_type_param_is_copy ... FAILED
+test tracked_new2_issue870 ... FAILED
+test two_phase ... FAILED
+test trait_depending_on_view_issue966 ... FAILED
+test use_arc_as_receiver_issue1311 ... FAILED
+
+failures:
+
+---- arc_with_tracked_issue870 stdout ----
+
+thread 'arc_with_tracked_issue870' (33907188) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- assign_twice stdout ----
+
+thread 'assign_twice' (33907194) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- assign_to_ghost_place_of_nonghost_local2 stdout ----
+
+thread 'assign_to_ghost_place_of_nonghost_local2' (33907191) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- assign_twice_no_lifetime stdout ----
+
+thread 'assign_twice_no_lifetime' (33907195) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- array_as_field_and_receiver_issue1604 stdout ----
+
+thread 'array_as_field_and_receiver_issue1604' (33907189) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- assign_to_ghost_place_of_nonghost_local3 stdout ----
+
+thread 'assign_to_ghost_place_of_nonghost_local3' (33907192) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- assign_to_ghost_place_of_nonghost_local4_issue1298 stdout ----
+
+thread 'assign_to_ghost_place_of_nonghost_local4_issue1298' (33907193) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- assign_to_ghost_place_of_nonghost_local stdout ----
+
+thread 'assign_to_ghost_place_of_nonghost_local' (33907190) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- borrow_local_ok stdout ----
+
+thread 'borrow_local_ok' (33907196) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- borrow_tracked_twice stdout ----
+
+thread 'borrow_tracked_twice' (33907198) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- borrow_local_twice stdout ----
+
+thread 'borrow_local_twice' (33907197) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- borrow_twice stdout ----
+
+thread 'borrow_twice' (33907200) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- borrow_tracked_twice_ok stdout ----
+
+thread 'borrow_tracked_twice_ok' (33907199) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- box_with_tracked_issue870 stdout ----
+
+thread 'box_with_tracked_issue870' (33907201) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consts_issue1791 stdout ----
+
+thread 'consts_issue1791' (33907202) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_fields_ok stdout ----
+
+thread 'consume_fields_ok' (33907203) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_tracked_twice stdout ----
+
+thread 'consume_tracked_twice' (33907205) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_once stdout ----
+
+thread 'consume_once' (33907204) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_exp stdout ----
+
+thread 'consume_twice_exp' (33907209) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_call stdout ----
+
+thread 'consume_twice_call' (33907207) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_fields stdout ----
+
+thread 'consume_twice_fields' (33907211) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_field_struct stdout ----
+
+thread 'consume_twice_field_struct' (33907210) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_else stdout ----
+
+thread 'consume_twice_else' (33907208) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice stdout ----
+
+thread 'consume_twice' (33907206) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_if stdout ----
+
+thread 'consume_twice_if' (33907213) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_if_return stdout ----
+
+thread 'consume_twice_if_return' (33907214) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_get stdout ----
+
+thread 'consume_twice_get' (33907212) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_match stdout ----
+
+thread 'consume_twice_match' (33907216) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_via_assign stdout ----
+
+thread 'consume_twice_via_assign' (33907218) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_is stdout ----
+
+thread 'consume_twice_is' (33907215) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_via_args stdout ----
+
+thread 'consume_twice_via_args' (33907217) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_via_return stdout ----
+
+thread 'consume_twice_via_return' (33907219) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_via_return_pair stdout ----
+
+thread 'consume_twice_via_return_pair' (33907220) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_via_return_struct stdout ----
+
+thread 'consume_twice_via_return_struct' (33907221) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_via_spec_args stdout ----
+
+thread 'consume_twice_via_spec_args' (33907222) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- consume_twice_via_temp stdout ----
+
+thread 'consume_twice_via_temp' (33907223) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- derefs_issue1971 stdout ----
+
+thread 'derefs_issue1971' (33907224) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- derefs_lifetime2 stdout ----
+
+thread 'derefs_lifetime2' (33907226) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- derefs_lifetime stdout ----
+
+thread 'derefs_lifetime' (33907225) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- dst_fields stdout ----
+
+thread 'dst_fields' (33907227) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- exec_struct_ghost_fields stdout ----
+
+thread 'exec_struct_ghost_fields' (33907228) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- exec_struct_ghost_fields_2 stdout ----
+
+thread 'exec_struct_ghost_fields_2' (33907229) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- exec_struct_ghost_fields_fn_style stdout ----
+
+thread 'exec_struct_ghost_fields_fn_style' (33907230) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- exec_struct_tracked_fields stdout ----
+
+thread 'exec_struct_tracked_fields' (33907231) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- generic_fn_value_issue1763 stdout ----
+
+thread 'generic_fn_value_issue1763' (33907235) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- implicit_deref_in_reciever_issue1243 stdout ----
+
+thread 'implicit_deref_in_reciever_issue1243' (33907237) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- exec_struct_tracked_fields_2 stdout ----
+
+thread 'exec_struct_tracked_fields_2' (33907232) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- index_with_extra_ref_issue1009 stdout ----
+
+thread 'index_with_extra_ref_issue1009' (33907238) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- if_branch_uninit stdout ----
+
+thread 'if_branch_uninit' (33907236) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- exec_struct_tracked_fields_fn_style stdout ----
+
+thread 'exec_struct_tracked_fields_fn_style' (33907233) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- external_body_that_uses_external_structs stdout ----
+
+thread 'external_body_that_uses_external_structs' (33907234) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_bounds_proof stdout ----
+
+thread 'lifetime_bounds_proof' (33907240) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_bounds_exec stdout ----
+
+thread 'lifetime_bounds_exec' (33907239) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_checking_in_ghost stdout ----
+
+thread 'lifetime_checking_in_ghost' (33907242) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_checking_in_array_index stdout ----
+
+thread 'lifetime_checking_in_array_index' (33907241) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_copy_fail stdout ----
+
+thread 'lifetime_copy_fail' (33907243) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_multiple_anonymous_names stdout ----
+
+thread 'lifetime_multiple_anonymous_names' (33907245) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_spec_const stdout ----
+
+thread 'lifetime_spec_const' (33907246) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- lifetime_copy_succeed stdout ----
+
+thread 'lifetime_copy_succeed' (33907244) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- rc_with_tracked_issue870 stdout ----
+
+thread 'rc_with_tracked_issue870' (33907249) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- regression_issue1296 stdout ----
+
+thread 'regression_issue1296' (33907251) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- match_branch_uninit stdout ----
+
+thread 'match_branch_uninit' (33907247) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- regression_issue959 stdout ----
+
+thread 'regression_issue959' (33907253) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- regression_issue1083 stdout ----
+
+thread 'regression_issue1083' (33907250) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- regression_issue835 stdout ----
+
+thread 'regression_issue835' (33907252) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- moved_value_via_at_patterns stdout ----
+
+thread 'moved_value_via_at_patterns' (33907248) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- regression_issue959_fails stdout ----
+
+thread 'regression_issue959_fails' (33907254) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- return_wrong_lifetime1 stdout ----
+
+thread 'return_wrong_lifetime1' (33907255) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- spec_fn_call_fn_arg_proof_code stdout ----
+
+thread 'spec_fn_call_fn_arg_proof_code' (33907257) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- test_ghost_at_assignment_mut_check_issue424 stdout ----
+
+thread 'test_ghost_at_assignment_mut_check_issue424' (33907259) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- test_ghost_at_assignment_double_assignment stdout ----
+
+thread 'test_ghost_at_assignment_double_assignment' (33907258) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- test_specification_on_external_function stdout ----
+
+thread 'test_specification_on_external_function' (33907261) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- return_wrong_lifetime2 stdout ----
+
+thread 'return_wrong_lifetime2' (33907256) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- test_no_lifetime_mut_check stdout ----
+
+thread 'test_no_lifetime_mut_check' (33907260) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_borrow_mut_assignment_fail stdout ----
+
+thread 'tracked_borrow_mut_assignment_fail' (33907263) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_borrow_mut_assignment stdout ----
+
+thread 'tracked_borrow_mut_assignment' (33907262) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_borrow_unit_issue1279 stdout ----
+
+thread 'tracked_borrow_unit_issue1279' (33907264) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_empty_union_uninitialized_1 stdout ----
+
+thread 'tracked_empty_union_uninitialized_1' (33907265) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_empty_union_uninitialized_2 stdout ----
+
+thread 'tracked_empty_union_uninitialized_2' (33907266) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_empty_union_uninitialized_4 stdout ----
+
+thread 'tracked_empty_union_uninitialized_4' (33907268) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_in_ghost1 stdout ----
+
+thread 'tracked_in_ghost1' (33907269) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_empty_union_uninitialized_3 stdout ----
+
+thread 'tracked_empty_union_uninitialized_3' (33907267) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_in_ghost2 stdout ----
+
+thread 'tracked_in_ghost2' (33907270) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_in_ghost3 stdout ----
+
+thread 'tracked_in_ghost3' (33907271) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_is_not_copy_just_because_type_param_is_clone stdout ----
+
+thread 'tracked_is_not_copy_just_because_type_param_is_clone' (33907274) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_new_issue870 stdout ----
+
+thread 'tracked_new_issue870' (33907276) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_static_ref_checks_outlives stdout ----
+
+thread 'tracked_static_ref_checks_outlives' (33907277) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- two_phase_with_overloaded_compound_assignment_operator stdout ----
+
+thread 'two_phase_with_overloaded_compound_assignment_operator' (33907280) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_is_not_clone_just_because_type_param_is_clone stdout ----
+
+thread 'tracked_is_not_clone_just_because_type_param_is_clone' (33907273) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_is_copy_if_type_param_is_copy stdout ----
+
+thread 'tracked_is_copy_if_type_param_is_copy' (33907272) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- tracked_new2_issue870 stdout ----
+
+thread 'tracked_new2_issue870' (33907275) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- two_phase stdout ----
+
+thread 'two_phase' (33907279) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- trait_depending_on_view_issue966 stdout ----
+
+thread 'trait_depending_on_view_issue966' (33907278) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+---- use_arc_as_receiver_issue1311 stdout ----
+
+thread 'use_arc_as_receiver_issue1311' (33907281) panicked at rust_verify_test/tests/common/mod.rs:243:9:
+not running in vargo, read the README for instructions
+
+
+failures:
+    arc_with_tracked_issue870
+    array_as_field_and_receiver_issue1604
+    assign_to_ghost_place_of_nonghost_local
+    assign_to_ghost_place_of_nonghost_local2
+    assign_to_ghost_place_of_nonghost_local3
+    assign_to_ghost_place_of_nonghost_local4_issue1298
+    assign_twice
+    assign_twice_no_lifetime
+    borrow_local_ok
+    borrow_local_twice
+    borrow_tracked_twice
+    borrow_tracked_twice_ok
+    borrow_twice
+    box_with_tracked_issue870
+    consts_issue1791
+    consume_fields_ok
+    consume_once
+    consume_tracked_twice
+    consume_twice
+    consume_twice_call
+    consume_twice_else
+    consume_twice_exp
+    consume_twice_field_struct
+    consume_twice_fields
+    consume_twice_get
+    consume_twice_if
+    consume_twice_if_return
+    consume_twice_is
+    consume_twice_match
+    consume_twice_via_args
+    consume_twice_via_assign
+    consume_twice_via_return
+    consume_twice_via_return_pair
+    consume_twice_via_return_struct
+    consume_twice_via_spec_args
+    consume_twice_via_temp
+    derefs_issue1971
+    derefs_lifetime
+    derefs_lifetime2
+    dst_fields
+    exec_struct_ghost_fields
+    exec_struct_ghost_fields_2
+    exec_struct_ghost_fields_fn_style
+    exec_struct_tracked_fields
+    exec_struct_tracked_fields_2
+    exec_struct_tracked_fields_fn_style
+    external_body_that_uses_external_structs
+    generic_fn_value_issue1763
+    if_branch_uninit
+    implicit_deref_in_reciever_issue1243
+    index_with_extra_ref_issue1009
+    lifetime_bounds_exec
+    lifetime_bounds_proof
+    lifetime_checking_in_array_index
+    lifetime_checking_in_ghost
+    lifetime_copy_fail
+    lifetime_copy_succeed
+    lifetime_multiple_anonymous_names
+    lifetime_spec_const
+    match_branch_uninit
+    moved_value_via_at_patterns
+    rc_with_tracked_issue870
+    regression_issue1083
+    regression_issue1296
+    regression_issue835
+    regression_issue959
+    regression_issue959_fails
+    return_wrong_lifetime1
+    return_wrong_lifetime2
+    spec_fn_call_fn_arg_proof_code
+    test_ghost_at_assignment_double_assignment
+    test_ghost_at_assignment_mut_check_issue424
+    test_no_lifetime_mut_check
+    test_specification_on_external_function
+    tracked_borrow_mut_assignment
+    tracked_borrow_mut_assignment_fail
+    tracked_borrow_unit_issue1279
+    tracked_empty_union_uninitialized_1
+    tracked_empty_union_uninitialized_2
+    tracked_empty_union_uninitialized_3
+    tracked_empty_union_uninitialized_4
+    tracked_in_ghost1
+    tracked_in_ghost2
+    tracked_in_ghost3
+    tracked_is_copy_if_type_param_is_copy
+    tracked_is_not_clone_just_because_type_param_is_clone
+    tracked_is_not_copy_just_because_type_param_is_clone
+    tracked_new2_issue870
+    tracked_new_issue870
+    tracked_static_ref_checks_outlives
+    trait_depending_on_view_issue966
+    two_phase
+    two_phase_with_overloaded_compound_assignment_operator
+    use_arc_as_receiver_issue1311
+
+test result: FAILED. 0 passed; 94 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p rust_verify_test --test lifetime`

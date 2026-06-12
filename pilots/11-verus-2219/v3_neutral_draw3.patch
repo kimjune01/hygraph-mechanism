@@ -1,0 +1,21 @@
+diff --git a/source/vir/src/modes.rs b/source/vir/src/modes.rs
+index ead7d92..8667191 100644
+--- a/source/vir/src/modes.rs
++++ b/source/vir/src/modes.rs
+@@ -1567,9 +1567,16 @@ fn check_expr(
+ ) -> Result<(Mode, Proph), VirErr> {
+     let (mode, _, proph) =
+         check_expr_handle_mut_arg(ctxt, record, typing, outer_mode, expect, expr, outer_proph)?;
++    if mode == Mode::Spec && typ_is_never(&expr.typ) {
++        return Err(error(&expr.span, "never-to-any coercion is not allowed in spec mode"));
++    }
+     Ok((mode, proph))
+ }
+ 
++fn typ_is_never(typ: &Typ) -> bool {
++    matches!(&**typ, TypX::Decorate(TypDecoration::Never, _, _))
++}
++
+ fn check_expr_handle_mut_arg(
+     ctxt: &Ctxt,
+     record: &mut Record,

@@ -1,0 +1,77 @@
+You are fixing a real soundness bug in `verus`, an SMT-based verifier for Rust (it proves Rust programs satisfy their specifications). The bug is in verus's own source code. You work ONLY inside this repository checkout, which is your current working directory:
+
+    REPO ROOT: /Users/junekim/Documents/verus-p11
+
+## The bug to fix
+verus-lang/verus issue #2219: "ghost uses of never type invalidates borrowchecking"
+
+Verus WRONGLY ACCEPTS (verifies) this program, which it should REJECT — `t` is a `tracked` (linear/affine) resource and is consumed twice:
+
+```rust
+proof fn test(nvr: !) { }
+proof fn consume<T>(tracked t: T) { }
+uninterp spec fn arbitrary<T>() -> T;
+
+proof fn test2<T>(tracked t: T) {
+    test(arbitrary());
+
+    consume(t);
+    consume(t);
+}
+```
+
+The ghost use of the `!`-typed value causes Rust to treat the code after it as unreachable, so verus's borrow/linearity check for `tracked` resources is silently skipped and the double-consume slips through. A correct verifier must report an error here (e.g. "use of moved value: `t`").
+
+## What counts as DONE (read carefully — a NARROW fix is NOT acceptable)
+Making the verifier reject the reported program is necessary but NOT sufficient. The reported issue is ONE example. A fix keyed to incidental features of how that example happens to be written — so that the reported program is rejected but OTHER programs that are unsound for the same underlying reason are still wrongly accepted — is an OVER-NARROW fix and will be REJECTED. Deliver the MOST GENERAL fix that stays SOUND and does not over-reject:
+- generality: every program unsound for the same root reason is now rejected, not just the reported one;
+- no over-rejection: programs that are genuinely valid still verify.
+Before declaring done, attack your own fix as an adversary would: construct programs that differ from the reported one ONLY in incidental ways and confirm the unsound ones are now rejected, and construct a genuinely-valid variant and confirm it still verifies. Do NOT stop at the first fix that rejects the reported program. Stop only when you cannot construct any unsound program your fix wrongly accepts, nor any valid one it wrongly rejects.
+
+## How to run verus on a single test program
+FIRST put the build tool on PATH (required, once per shell):
+
+    export PATH=/Users/junekim/Documents/verus-p11/tools/vargo/target/release:$PATH
+
+verus verifies one `.rs` file at a time. The verifier binary is `source/target-verus/release/verus`. After editing source you MUST rebuild. Build it like this:
+
+    ( cd /Users/junekim/Documents/verus-p11/source && env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/Users/junekim/Documents/verus-p11/tools/vargo/target/release:/tmp/rustup-shims:$PATH vargo build --release ) > /tmp/p11mf-scratch/build.log 2>&1 &
+
+then run on a file:
+
+    cd /Users/junekim/Documents/verus-p11/source && env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/tmp/rustup-shims:$PATH ./target-verus/release/verus --crate-type=lib <path-to-file.rs>
+
+Interpreting output:
+- a line like `verification results:: N verified, M errors` with `M > 0`, OR any `error[...]` / "use of moved value" => the program was REJECTED.
+- `N verified, 0 errors` with no error lines => the program VERIFIED (was accepted).
+Proof/spec code goes inside `verus! { ... }`; a file needs `fn main() {}`. Files using `!` need `#![allow(internal_features)] #![feature(never_type)]` at the top.
+
+## CRITICAL — keepalive (you will be killed if your output stream goes silent ~10 min, and verus rebuilds are slow and silent)
+- NEVER run a build (or any command) that blocks in the FOREGROUND for minutes. Launch every build in the BACKGROUND (as shown above, ending with `&`) and POLL it with SHORT separate commands: `sleep 60; tail -2 /tmp/p11mf-scratch/build.log; ls -la /Users/junekim/Documents/verus-p11/source/target-verus/release/rust_verify`. Repeat the poll (each `sleep` <= 90s) until the build finishes, printing one line each poll.
+- No single command should run longer than ~90 seconds. Keep a steady cadence of short tool calls. This continuous activity is what keeps you alive.
+
+## Where the verifier lives
+verus's own source is under `source/` — especially `source/rust_verify/src/` (mode/erasure and VIR generation: `erase.rs`, `rust_to_vir_expr.rs`, `fn_call_to_vir.rs`) and the vendored MIR-builder fork under `source/rustc_mir_build/` and `source/rustc_mir_build_additional_files/` (where Rust's control-flow graph is constructed and unreachable code is pruned). The bug's thread: the ghost `!`-typed expression makes Rust delete the control-flow edge after it, so the verifier never checks the following statements.
+
+## Regression check (use the keepalive pattern — run in background, poll)
+Before declaring done, confirm you did not break existing tests:
+
+    cd /Users/junekim/Documents/verus-p11/source && env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/Users/junekim/Documents/verus-p11/tools/vargo/target/release:/tmp/rustup-shims:$PATH vargo test -p rust_verify_test --test lifetime
+
+All previously-passing tests must still pass.
+
+## Hard boundaries (you are a contributor; the fix is NOT in the repo)
+- MODIFY only non-test Rust source under `source/` (NOT under any `*_test` crate or `tests/` dir).
+- Do NOT consult git history, git log, branches, stashes, reflog, tags, or any remote for "the fix" — it is not reachable and looking for it is cheating.
+- Do NOT read any directory outside /Users/junekim/Documents/verus-p11 (except writing scratch files under /tmp/p11mf-scratch). Do NOT browse the web.
+- Write your own scratch reproducer `.rs` files in /tmp/p11mf-scratch, never in a test crate.
+
+## Your approach
+Reproduce the bug, analyze the cause, fix it generally and soundly, verify the reported program is now rejected, and test edge cases. Make sure legitimate programs still verify and the regression suite still passes.
+
+## When done, return a report containing:
+- VERDICT: is the reported program now correctly REJECTED? (and regression-suite result)
+- The source file(s) and function(s) you changed.
+- A one-paragraph root-cause diagnosis and description of your fix.
+- The output of `git -C /Users/junekim/Documents/verus-p11 diff --stat`.
+Leave your edits in place in the working tree (do NOT revert them). Your final message is a report for an orchestrator, not a user — return the data, not prose.

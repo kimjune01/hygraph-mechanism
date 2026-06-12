@@ -1,0 +1,4 @@
+draw   arm      T1      T2      T3      verdict
+1      sv       REJECT  VERIFY  VERIFY  OVER-NARROW(T2)
+2      sv       REJECT  VERIFY  VERIFY  OVER-NARROW(T2)
+3      sv       REJECT  VERIFY  VERIFY  OVER-NARROW(T2)

@@ -1,0 +1,85 @@
+You are diagnosing and fixing a real soundness bug in `verus`, an SMT-based verifier for Rust (it proves Rust programs satisfy their specifications). The bug is in verus's own source code. You work ONLY inside this repository checkout:
+
+    REPO ROOT: /Users/junekim/Documents/verus-p11   (currently at the base commit)
+
+## The bug
+verus-lang/verus issue #2219: "ghost uses of never type invalidates borrowchecking"
+
+Verus WRONGLY ACCEPTS (verifies) this program, which it should REJECT — `t` is a `tracked` (linear/affine) resource and is consumed twice:
+
+```rust
+proof fn test(nvr: !) { }
+proof fn consume<T>(tracked t: T) { }
+uninterp spec fn arbitrary<T>() -> T;
+
+proof fn test2<T>(tracked t: T) {
+    test(arbitrary());
+
+    consume(t);
+    consume(t);
+}
+```
+
+The ghost use of the `!`-typed value causes Rust to treat the code after it as unreachable, so verus's borrow/linearity check for `tracked` resources is silently skipped and the double-consume slips through. A correct verifier must report an error here (e.g. "use of moved value: `t`").
+
+## What counts as DONE (read carefully — a NARROW fix is NOT acceptable)
+Making the verifier reject the reported program is necessary but NOT sufficient. The reported issue is ONE example. A fix keyed to incidental features of how that example happens to be written — so that the reported program is rejected but OTHER programs that are unsound for the same underlying reason are still wrongly accepted — is an OVER-NARROW fix and will be REJECTED. Deliver the MOST GENERAL fix that stays SOUND and does not over-reject:
+- generality: every program unsound for the same root reason is now rejected, not just the reported one;
+- no over-rejection: programs that are genuinely valid still verify.
+Before declaring done, attack your own fix as an adversary would: construct programs that differ from the reported one ONLY in incidental ways and confirm the unsound ones are now rejected, and construct a genuinely-valid variant and confirm it still verifies. Do NOT stop at the first fix that rejects the reported program. Stop only when you cannot construct any unsound program your fix wrongly accepts, nor any valid one it wrongly rejects.
+
+## How to run verus on a single test program
+verus verifies one `.rs` file at a time. From the repo root:
+
+    cd /Users/junekim/Documents/verus-p11/source && env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/tmp/rustup-shims:$PATH \
+      bash -c 'vargo build --release >/dev/null 2>&1 && ./target-verus/release/verus --crate-type=lib <path-to-file.rs>'
+
+Interpreting output:
+- a line like `verification results:: N verified, M errors` with `M > 0`, OR any `error[...]` / "use of moved value" => the program was REJECTED.
+- `N verified, 0 errors` with no error lines => the program VERIFIED (was accepted).
+Proof/spec code goes inside `verus! { ... }`; a file needs `fn main() {}`. Files using `!` need `#![allow(internal_features)] #![feature(never_type)]` at the top. IMPORTANT: that command REBUILDS the verifier (`vargo build --release`) before running, so it always reflects your latest source edits. A bare `./target-verus/release/verus` does NOT pick up edits — always use the command above.
+
+## Where the verifier lives
+verus's own source is under `source/` — especially `source/rust_verify/src/` (mode/erasure and VIR generation: `erase.rs`, `rust_to_vir_expr.rs`, `fn_call_to_vir.rs`) and the vendored MIR-builder fork under `source/rustc_mir_build/` and `source/rustc_mir_build_additional_files/` (where Rust's control-flow graph is constructed and unreachable code is pruned). The bug's thread: the ghost `!`-typed expression makes Rust delete the control-flow edge after it, so the verifier never checks the following statements.
+
+## Hard boundaries (you are a contributor; the fix is NOT in the repo)
+- MODIFY only non-test Rust source under `source/` (NOT under any `*_test` crate or `tests/` dir).
+- Do NOT consult git history, git log, branches, stashes, reflog, tags, or any remote for "the fix" — it is not reachable and looking for it is cheating.
+- Do NOT read any directory outside /Users/junekim/Documents/verus-p11 (except writing scratch files under /tmp/p11abd-scratch). Do NOT browse the web.
+- Write your own scratch reproducer `.rs` files in /tmp/p11abd-scratch, never in a test crate.
+
+## The procedures you must execute (specifications — apply these, do not improvise)
+You will solve this by **bi-abduction** then **tri-abduction** — the compositional spec-inference procedures from separation logic. Their specifications:
+
+**Bi-abduction** (Calcagno, Distefano, O'Hearn, Yang; the basis of Infer). Given a required entailment that does NOT currently hold, `CURRENT |- REQUIRED`, infer TWO unknowns simultaneously:
+    CURRENT * (?anti-frame) |- REQUIRED * (?frame)
+- the **anti-frame** = the missing hypothesis that must be assumed on the left to make the entailment hold (the abduced precondition);
+- the **frame** = the leftover on the right the entailment does not touch.
+Solve for the **weakest** anti-frame that closes the entailment — the most general missing precondition, not one tailored to a single witness.
+
+**Tri-abduction** (Outcome Separation Logic, Zilberstein et al., OOPSLA 2024, Sec 5.1). Bi-abduction composes sequentially; **tri-abduction composes two BRANCHES** that arise from a choice/effect. For branches with preconditions `P1`, `P2` reachable by different constructs, infer THREE unknowns — one shared anti-frame `M` that works for both branches, plus a per-branch leftover frame `F1`, `F2`:
+    P1 * F1 |= M      and      M |= P2 * F2
+The point: when the same branch can be reached more than one way, infer ONE shared precondition `M` governing the branch, not a separate condition per construct.
+
+## Execute the procedures on this bug (do not jump to a fix)
+Map the bug onto the specifications above and RUN them. Keep the work in /tmp/p11abd-scratch/ABDUCTION.md.
+
+1. **Set up the entailment (bi-abduction).** `REQUIRED` = the soundness obligation the verifier must enforce after the call (the linearity/borrow check on `tracked` resources). `CURRENT` = the state the verifier actually has after it deletes the post-call control-flow edge; that deletion makes `CURRENT |-/- REQUIRED` (obligation dropped). Run bi-abduction: infer the **weakest anti-frame `P`** — the missing precondition under which deleting that edge is SOUND. Write `P` as a *semantic predicate on the program*, not a syntactic pattern; weaken to a fixpoint (for each surface feature of the reported example, decide: load-bearing for `P`, or merely one witness of it?).
+
+2. **Compose the branch reachings (tri-abduction).** The deleted edge is one branch of the call (control does-not-continue), reachable by more than one construct. Run tri-abduction: infer the single shared `M` that must hold for the does-not-continue branch to be legitimate across ALL the ways it can be reached — not a separate condition per construct. `M` is your generalized soundness precondition.
+
+3. **Locate and enforce.** Trace into the verifier/MIR-builder to where the edge-deletion is taken; gate it on the abduced `P`/`M` (the general semantic condition), not on the reported example's surface feature.
+
+4. **Validate the abduction.** Construct programs that satisfy `P` by a *different surface form* than the reported one and confirm they are now rejected; construct a program where `P` genuinely holds (deletion IS sound) and confirm it still verifies. Any program that refutes `P` means the abduction was wrong — re-run bi-abduction for a corrected `P`.
+
+5. **Regression.** Run the lifetime/borrow suite; nothing green may go red.
+
+Write the entailment, the abduced `P`/`M` (and each weakening step), and every validation program + verdict to ABDUCTION.md.
+
+## When done, return a report containing:
+- VERDICT: is the reported program now correctly REJECTED? (+ generalization probes, over-rejection probe, regression result)
+- The abduced predicate `P` in one sentence (the general semantic condition you gated on).
+- The source file(s) and function(s) you changed.
+- A list of the validation programs you ran and each one's verdict.
+- The output of `git -C /Users/junekim/Documents/verus-p11 diff --stat`.
+Your final message is a report for an orchestrator, not a user — return the data, not prose.

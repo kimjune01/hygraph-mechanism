@@ -1,0 +1,15 @@
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.12s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mvstd fresh[0m

@@ -1,0 +1,57 @@
+VERDICT: INCOMPLETE.
+
+Reported program: REJECTED with `error[E0382]: use of moved value: t`.
+
+Generality probe:
+- Generator: `/tmp/p11sv-scratch/generator.py`
+- Last full run: `/tmp/p11sv-scratch/generator_results.json`
+- Space: `!` and type formers involving `!`, 3 producer forms, 6 use contexts, 3 wrappers, 3 tracked-resource shapes.
+- Result: `1109 total`, `1107 UNSOUND`, `2 SOUND`, `7 failures`.
+- Known remaining counterexample still VERIFIED:
+  - `/tmp/p11sv-scratch/generated/0021_unsound_never_arbitrary_nested_block_stmt_outer_block_generic.rs`
+  - Shape:
+    ```rust
+    {
+        { arbitrary::<!>(); }
+    }
+    consume(t);
+    consume(t);
+    ```
+- Over-rejection probe:
+  - `/tmp/p11sv-scratch/valid_single_infer.rs`: VERIFIED, `3 verified, 0 errors`.
+
+Regression:
+- `vargo test -p rust_verify_test --test lifetime`
+- PASS: `94 passed; 0 failed`.
+
+Changed files / functions:
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - `is_erased_ghost_value_fn`
+  - `remove_never_type_from_erased_stmt`
+  - erased-placeholder detection helpers
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+- `source/rustc_mir_build/src/thir/cx/block.rs`
+  - `ThirBuildCx::mirror_stmts`
+- `source/rustc_mir_build/src/builder/expr/stmt.rs`
+  - `Builder::stmt_expr`
+
+Root cause / current fix:
+Rust MIR construction and post-build pruning treat Verus-erased ghost placeholders with uninhabited result types as real divergence. That removes reachability to later proof statements, so Rust borrow checking misses double use of tracked resources. Current patch preserves return edges for synthetic `erased_ghost_value` calls and handles several ignored statement forms by retyping erased `!` placeholders to unit. This fixes the reported program and many variants, but it is not yet general: nested block-tail erased `!` expressions still leave later code unreachable.
+
+Perturbation verdicts:
+- Original `test(arbitrary()); consume(t); consume(t);`: REJECTED.
+- Direct erased statement `arbitrary::<!>(); consume(t); consume(t);`: REJECTED.
+- Braced erased statement `{ arbitrary::<!>(); } consume(t); consume(t);`: REJECTED.
+- Nested tail block `{ { arbitrary::<!>(); } } consume(t); consume(t);`: VERIFIED incorrectly.
+- Valid single consume after ghost never call: VERIFIED.
+- Real `return; consume(t); consume(t);`: generator SOUND probe expected VERIFY.
+
+`git diff --stat`:
+```text
+ source/rustc_mir_build/src/builder/expr/stmt.rs  |  29 ++++
+ source/rustc_mir_build/src/builder/mod.rs        |  13 +-
+ source/rustc_mir_build/src/thir/cx/block.rs      |   9 +-
+ source/rustc_mir_build_additional_files/verus.rs | 191 +++++++++++++++++++++++
+ 4 files changed, 239 insertions(+), 3 deletions(-)
+```

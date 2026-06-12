@@ -1,0 +1,38 @@
+You are fixing a real soundness bug in `verus`, an SMT-based verifier for Rust. The bug is in verus's own source. Work ONLY inside this checkout (your cwd): /Users/junekim/Documents/verus-p11
+
+## The bug
+verus-lang/verus issue #2219 "ghost uses of never type invalidates borrowchecking". verus WRONGLY ACCEPTS this (it should REJECT it — `t` is a `tracked`/affine resource consumed twice):
+
+```rust
+proof fn test(nvr: !) { }
+proof fn consume<T>(tracked t: T) { }
+uninterp spec fn arbitrary<T>() -> T;
+proof fn test2<T>(tracked t: T) {
+    test(arbitrary());
+    consume(t);
+    consume(t);
+}
+```
+A ghost use of an uninhabited-typed value makes rustc treat following code as unreachable, so verus's linearity check for `tracked` resources is skipped and the double-consume slips through. A correct verifier must report an error here.
+
+## What DONE means — NARROW is rejected
+Handling the reported case is necessary, not sufficient. Deliver the MOST GENERAL fix that stays SOUND and does not over-reject:
+- generality: every program unsound for the same root reason is now rejected;
+- no over-rejection: every genuinely-valid program still verifies.
+
+## The gate decides — not your own tests
+Hill-climb against this gate, which holds an enumerated, externally-calibrated space of cases you must not read:
+
+    bash /Users/junekim/Documents/hygraph-mechanism/pilots/11-verus-2219/gate2/gate.sh
+
+It rebuilds your verifier and prints `GATE pass=true` only when your fix (a) rejects every bug case AND (b) over-rejects NO valid program. Otherwise it prints `GATE pass=false` with which cases are mishandled — bug cases still accepted, and/or valid programs you wrongly over-rejected (named `p1`, `p2`, … — these are SOUND and must keep verifying). Each mishandled case is a counterexample outside your current hypothesis: fix the deeper root cause, rebuild, re-run the gate. Do NOT stop at the first build that handles the reported case — stop only at `GATE pass=true`.
+
+Do NOT read the gate's scripts, calibration, or case files — that is the answer key; running the gate is allowed, reading its internals is cheating.
+
+## Boundaries
+- Modify only non-test Rust source under `source/`. Do NOT consult git history/branches/stashes/remotes for "the fix" — it is not reachable. Do NOT read outside /Users/junekim/Documents/verus-p11 except writing scratch under /tmp/p11g2-scratch. No web.
+- To verify a single file yourself: `cd source && env -u RUSTC -u RUSTUP_TOOLCHAIN PATH=/tmp/rustup-shims:$PATH ./target-verus/release/verus --crate-type=lib <file.rs>` (build first with vargo on PATH).
+
+## Report when done
+- VERDICT: GATE pass=true? ; files/functions changed ; one-paragraph root cause + fix ; `git -C /Users/junekim/Documents/verus-p11 diff --stat`.
+Leave edits in place. Final message is a data report for an orchestrator.

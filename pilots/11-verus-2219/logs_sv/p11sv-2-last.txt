@@ -1,0 +1,53 @@
+VERDICT: reported program is now correctly REJECTED.
+
+Changed files/functions:
+- `source/rustc_mir_build_additional_files/verus.rs`
+  - `get_verus_erasure_ctxt_option`
+  - added `is_erased_ghost_value_call`
+  - added `erased_ghost_value_args`
+  - added `erased_ghost_value_is_never`
+  - added `is_zst_fn_def`
+- `source/rustc_mir_build/src/builder/mod.rs`
+  - `Builder::lint_and_remove_uninhabited`
+- `source/rustc_mir_build/src/builder/expr/stmt.rs`
+  - `Builder::stmt_expr`
+- `source/rustc_mir_build/src/builder/expr/as_temp.rs`
+  - `Builder::as_temp_inner`
+
+Root cause/fix:
+- Root cause: Verus erases ghost/spec expressions into synthetic `erased_ghost_value` calls. When those synthetic values have uninhabited type, Rust MIR construction treated them like real diverging Rust calls/expressions and removed normal control-flow successors. That made later tracked-resource moves unreachable to borrow/linearity checking.
+- Fix: make MIR construction Verus-aware for `erased_ghost_value`: do not remove call successors for synthetic erased ghost values, recognize erased ghost statement placeholders through `Scope`/`NeverToAny`, lower their real subexpressions without treating preserved zero-sized `FnDef` operands as diverging work, reject bare ghost `!` statements with no real subexpressions, and avoid scheduling value drops for temporaries that never receive a value.
+
+Focused probes:
+- `/tmp/p11sv-scratch/repro.rs`: REJECTED, `use of moved value: t`.
+- `/tmp/p11sv-scratch/generated/0006_unsound_never_arbitrary_block_stmt_generic.rs`: REJECTED, `ghost expression of never type is not allowed in statement position`.
+- `/tmp/p11sv-scratch/valid_direct_single.rs`: VERIFIED, `3 verified, 0 errors`.
+- `/tmp/p11sv-scratch/sound_real_return.rs`: VERIFIED, `2 verified, 0 errors`.
+
+Generator:
+- Script: `/tmp/p11sv-scratch/adversarial_generator.py`
+- Final widened run: `generated=945 counterexamples=0`
+- Expected-unsound rejected: 665/665.
+- Expected-valid accepted: 280/280.
+- Varied types: `!`, `(u8, !)`, `Wrap<!>`, `Result<!, !>`, `Result<(u8, !), Wrap<!>>`, plus inhabited controls `()`, `bool`, `(u8, ())`, `Res`.
+- Varied producers: direct `arbitrary`, `spec_id(arbitrary)`, tuple-struct field projection, block producer, if/else producer.
+- Varied sites: direct call arg, wildcard let, bare block statement, if-then, match arm, nested block, let-unit block.
+- Varied resources: generic tracked, concrete tracked `Res`, tuple tracked.
+
+Counterexample found during iteration:
+- `{ arbitrary::<!>(); }` before double-consuming tracked `t` still verified after the initial call-edge fix.
+- Re-fixed by adding statement-position erased-placeholder handling and bare ghost-`!` statement rejection.
+- Notes written to `/tmp/p11sv-scratch/final_notes.md`.
+
+Regression:
+- `vargo test -p rust_verify_test --test lifetime`
+- Result: passed, 94 tests ok.
+
+`git diff --stat`:
+```text
+source/rustc_mir_build/src/builder/expr/as_temp.rs | 10 +++-
+source/rustc_mir_build/src/builder/expr/stmt.rs    | 43 +++++++++++++++
+source/rustc_mir_build/src/builder/mod.rs          | 10 +++-
+source/rustc_mir_build_additional_files/verus.rs   | 62 +++++++++++++++++++++-
+4 files changed, 121 insertions(+), 4 deletions(-)
+```

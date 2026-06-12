@@ -1,0 +1,11 @@
+P11ABD START Thu 11 Jun 2026 11:20:53 PDT vargo=/Users/junekim/Documents/verus-p11/tools/vargo/target/release/vargo
+[p11abd 11:20] draw 1 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11abd 11:31] draw 1 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch       60L)
+[p11abd 11:31] draw 2 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11abd 11:40] draw 2 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch       46L)
+[p11abd 11:40] draw 3 — reset+clean-base-build
+   pre-draw base grade: VERIFY VERIFY VERIFY 
+[p11abd 11:58] draw 3 -> REJECT/VERIFY/VERIFY = OVER-NARROW(T2) (patch       45L)
+P11ABD DONE Thu 11 Jun 2026 11:58:40 PDT

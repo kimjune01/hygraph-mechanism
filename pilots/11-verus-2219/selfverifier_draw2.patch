@@ -1,0 +1,190 @@
+diff --git a/source/rustc_mir_build/src/builder/expr/as_temp.rs b/source/rustc_mir_build/src/builder/expr/as_temp.rs
+index d8ac19e..9e94bc4 100644
+--- a/source/rustc_mir_build/src/builder/expr/as_temp.rs
++++ b/source/rustc_mir_build/src/builder/expr/as_temp.rs
+@@ -93,6 +93,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+             this.fixed_temps.insert(expr_id, temp);
+         }
+         let temp_place = Place::from(temp);
++        let temp_has_no_value = match expr.kind {
++            ExprKind::Break { .. } | ExprKind::Continue { .. } | ExprKind::Return { .. } => true,
++            ExprKind::Block { block } => {
++                matches!(this.thir[block], Block { expr: None, targeted_by_break: false, .. })
++                    && expr_ty.is_never()
++            }
++            _ => false,
++        };
+ 
+         match expr.kind {
+             // Don't bother with StorageLive and Dead for these temporaries,
+@@ -125,7 +133,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         block = this.expr_into_dest(temp_place, block, expr_id).into_block();
+ 
+-        if let Some(temp_lifetime) = temp_lifetime.temp_lifetime {
++        if !temp_has_no_value && let Some(temp_lifetime) = temp_lifetime.temp_lifetime {
+             this.schedule_drop(expr_span, temp_lifetime, temp, DropKind::Value);
+         }
+ 
+diff --git a/source/rustc_mir_build/src/builder/expr/stmt.rs b/source/rustc_mir_build/src/builder/expr/stmt.rs
+index 66ee139..27e1668 100644
+--- a/source/rustc_mir_build/src/builder/expr/stmt.rs
++++ b/source/rustc_mir_build/src/builder/expr/stmt.rs
+@@ -148,6 +148,49 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                      without a statement scope",
+                 );
+ 
++                if let ExprKind::Block { block: ast_block } = expr.kind
++                    && expr.ty.is_never()
++                {
++                    let destination = this.get_unit_temp();
++                    let end =
++                        this.ast_block(destination, block, ast_block, source_info).into_block();
++                    if matches!(
++                        this.cfg.basic_blocks[end].terminator().kind,
++                        TerminatorKind::Unreachable
++                    ) {
++                        let next = this.cfg.start_new_block();
++                        this.cfg.basic_blocks[end].terminator_mut().kind =
++                            TerminatorKind::Goto { target: next };
++                        return next.unit();
++                    }
++                    return end.unit();
++                }
++
++                if let Some(erasure_ctxt) = crate::verus::get_verus_erasure_ctxt_option()
++                    && let Some(args) =
++                        crate::verus::erased_ghost_value_args(&this.thir, &erasure_ctxt, expr_id)
++                {
++                    let args = args
++                        .into_iter()
++                        .filter(|arg| !crate::verus::is_zst_fn_def(&this.thir, *arg))
++                        .collect::<Vec<_>>();
++                    if crate::verus::erased_ghost_value_is_never(&this.thir, &erasure_ctxt, expr_id)
++                        && args.len() == 0
++                    {
++                        this.tcx.dcx().span_err(
++                            expr.span,
++                            "ghost expression of never type is not allowed in statement position",
++                        );
++                        return block.unit();
++                    }
++                    for arg in args {
++                        block = this.stmt_expr(block, arg, statement_scope).into_block();
++                    }
++                    let next = this.cfg.start_new_block();
++                    this.cfg.goto(block, source_info, next);
++                    return next.unit();
++                }
++
+                 // Issue #54382: When creating temp for the value of
+                 // expression like:
+                 //
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..98a3642 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,7 +845,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref mut target, destination, ref func, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+@@ -876,7 +877,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     true
+                 };
+ 
+-            if !ty_is_inhabited {
++            let is_erased_ghost_value_call =
++                crate::verus::get_verus_erasure_ctxt_option().as_ref().is_some_and(
++                    |erasure_ctxt| crate::verus::is_erased_ghost_value_call(erasure_ctxt, func),
++                );
++
++            if !ty_is_inhabited && !is_erased_ghost_value_call {
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..e2cb4d3 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -129,7 +129,7 @@ fn get_verus_erasure_ctxt() -> Arc<VerusErasureCtxt> {
+         .clone()
+ }
+ 
+-fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
++pub(crate) fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 
+@@ -513,6 +513,66 @@ pub(crate) fn is_erased<'tcx>(
+     }
+ }
+ 
++pub(crate) fn is_erased_ghost_value_call<'tcx>(
++    erasure_ctxt: &VerusErasureCtxt,
++    func: &rustc_middle::mir::Operand<'tcx>,
++) -> bool {
++    match func {
++        rustc_middle::mir::Operand::Constant(constant) => match constant.const_.ty().kind() {
++            TyKind::FnDef(fn_def_id, _) => *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id,
++            _ => false,
++        },
++        _ => false,
++    }
++}
++
++pub(crate) fn erased_ghost_value_args<'tcx>(
++    thir: &rustc_middle::thir::Thir<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    expr_id: ExprId,
++) -> Option<Vec<ExprId>> {
++    match &thir.exprs[expr_id].kind {
++        ExprKind::Call { fun, args, .. } => match thir.exprs[*fun].ty.kind() {
++            TyKind::FnDef(fn_def_id, _)
++                if *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id =>
++            {
++                let tup_arg = args[0];
++                match &thir.exprs[tup_arg].kind {
++                    ExprKind::Tuple { fields } => Some(fields.iter().copied().collect()),
++                    _ => None,
++                }
++            }
++            _ => None,
++        },
++        ExprKind::NeverToAny { source } => erased_ghost_value_args(thir, erasure_ctxt, *source),
++        ExprKind::Scope { value, .. } => erased_ghost_value_args(thir, erasure_ctxt, *value),
++        _ => None,
++    }
++}
++
++pub(crate) fn erased_ghost_value_is_never<'tcx>(
++    thir: &rustc_middle::thir::Thir<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    expr_id: ExprId,
++) -> bool {
++    match &thir.exprs[expr_id].kind {
++        ExprKind::NeverToAny { source } => erased_ghost_value_is_never(thir, erasure_ctxt, *source),
++        ExprKind::Scope { value, .. } => erased_ghost_value_is_never(thir, erasure_ctxt, *value),
++        _ => {
++            erased_ghost_value_args(thir, erasure_ctxt, expr_id).is_some()
++                && thir.exprs[expr_id].ty.is_never()
++        }
++    }
++}
++
++pub(crate) fn is_zst_fn_def<'tcx>(thir: &rustc_middle::thir::Thir<'tcx>, expr_id: ExprId) -> bool {
++    match &thir.exprs[expr_id].kind {
++        ExprKind::Scope { value, .. } => is_zst_fn_def(thir, *value),
++        ExprKind::ZstLiteral { .. } => matches!(thir.exprs[expr_id].ty.kind(), TyKind::FnDef(..)),
++        _ => false,
++    }
++}
++
+ /// Given an expression like `&x`, `*x` or `x.field`, determine if it should be erased
+ /// by looking at if `x` is erased.
+ pub(crate) fn is_node_with_single_arg_erased<'tcx>(

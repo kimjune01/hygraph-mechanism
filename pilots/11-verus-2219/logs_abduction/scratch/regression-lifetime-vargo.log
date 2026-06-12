@@ -1,0 +1,153 @@
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.20s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.05s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling serde_core v1.0.228
+   Compiling syn v2.0.101
+   Compiling ahash v0.8.12
+   Compiling tempfile v3.23.0
+   Compiling either v1.15.0
+   Compiling winnow v0.7.13
+   Compiling toml_writer v1.0.4
+   Compiling hashbrown v0.14.5
+   Compiling lasso v0.7.3
+   Compiling toml_parser v1.0.4
+   Compiling synstructure v0.13.2
+   Compiling serde_json v1.0.146
+   Compiling toml_datetime v0.7.3
+   Compiling serde_spanned v1.0.3
+   Compiling serde_derive v1.0.228
+   Compiling futures-macro v0.3.31
+   Compiling clap_derive v4.5.49
+   Compiling strum_macros v0.26.4
+   Compiling bitmask-enum v2.2.5
+   Compiling vir-macros v0.1.0 (/Users/junekim/Documents/verus-p11/source/vir_macros)
+   Compiling toml v0.9.8
+   Compiling rust_verify_test_macros v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test_macros)
+   Compiling futures-util v0.3.31
+   Compiling strum v0.26.3
+   Compiling clap v4.5.53
+   Compiling serde v1.0.228
+   Compiling num-bigint v0.4.6
+   Compiling futures-executor v0.3.31
+   Compiling futures v0.3.31
+   Compiling wasm-timer v0.2.5
+   Compiling num-rational v0.4.2
+   Compiling num v0.4.3
+   Compiling smt-scope v0.1.7
+   Compiling air v0.1.0 (/Users/junekim/Documents/verus-p11/source/air)
+   Compiling vir v0.1.0 (/Users/junekim/Documents/verus-p11/source/vir)
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 28.33s
+     Running tests/lifetime.rs (target/release/deps/lifetime-3d274ab8579eacb8)
+
+running 94 tests
+test assign_twice ... ok
+test assign_to_ghost_place_of_nonghost_local4_issue1298 ... ok
+test assign_to_ghost_place_of_nonghost_local3 ... ok
+test assign_to_ghost_place_of_nonghost_local ... ok
+test assign_to_ghost_place_of_nonghost_local2 ... ok
+test assign_twice_no_lifetime ... ok
+test borrow_twice ... ok
+test borrow_tracked_twice ... ok
+test borrow_local_twice ... ok
+test borrow_local_ok ... ok
+test borrow_tracked_twice_ok ... ok
+test consume_once ... ok
+test consts_issue1791 ... ok
+test consume_fields_ok ... ok
+test consume_twice ... ok
+test consume_tracked_twice ... ok
+test consume_twice_call ... ok
+test consume_twice_else ... ok
+test consume_twice_exp ... ok
+test consume_twice_field_struct ... ok
+test consume_twice_fields ... ok
+test consume_twice_get ... ok
+test consume_twice_if ... ok
+test consume_twice_if_return ... ok
+test consume_twice_is ... ok
+test consume_twice_match ... ok
+test consume_twice_via_assign ... ok
+test consume_twice_via_return ... ok
+test consume_twice_via_args ... ok
+test consume_twice_via_spec_args ... ok
+test consume_twice_via_return_pair ... ok
+test consume_twice_via_return_struct ... ok
+test consume_twice_via_temp ... ok
+test box_with_tracked_issue870 ... ok
+test arc_with_tracked_issue870 ... ok
+test exec_struct_ghost_fields ... ok
+test derefs_lifetime ... ok
+test derefs_lifetime2 ... ok
+test exec_struct_tracked_fields ... ok
+test exec_struct_ghost_fields_fn_style ... ok
+test exec_struct_ghost_fields_2 ... ok
+test exec_struct_tracked_fields_2 ... ok
+test derefs_issue1971 ... ok
+test array_as_field_and_receiver_issue1604 ... ok
+test exec_struct_tracked_fields_fn_style ... ok
+test if_branch_uninit ... ok
+test dst_fields ... ok
+test external_body_that_uses_external_structs ... ok
+test generic_fn_value_issue1763 ... ok
+test implicit_deref_in_reciever_issue1243 ... ok
+test lifetime_checking_in_array_index ... ok
+test lifetime_copy_fail ... ok
+test lifetime_checking_in_ghost ... ok
+test lifetime_bounds_exec ... ok
+test lifetime_bounds_proof ... ok
+test lifetime_multiple_anonymous_names ... ok
+test match_branch_uninit ... ok
+test lifetime_copy_succeed ... ok
+test moved_value_via_at_patterns ... ok
+test regression_issue1083 ... ok
+test lifetime_spec_const ... ok
+test regression_issue959_fails ... ok
+test return_wrong_lifetime1 ... ok
+test return_wrong_lifetime2 ... ok
+test regression_issue835 ... ok
+test index_with_extra_ref_issue1009 ... ok
+test spec_fn_call_fn_arg_proof_code ... ok
+test regression_issue959 ... ok
+test test_no_lifetime_mut_check ... ok
+test rc_with_tracked_issue870 ... ok
+test test_ghost_at_assignment_double_assignment ... ok
+test test_ghost_at_assignment_mut_check_issue424 ... ok
+test tracked_borrow_mut_assignment_fail ... ok
+test regression_issue1296 ... ok
+test tracked_empty_union_uninitialized_1 ... ok
+test test_specification_on_external_function ... ok
+test tracked_borrow_mut_assignment ... ok
+test tracked_borrow_unit_issue1279 ... ok
+test tracked_empty_union_uninitialized_2 ... ok
+test tracked_in_ghost3 ... ok
+test tracked_in_ghost2 ... ok
+test tracked_is_not_clone_just_because_type_param_is_clone ... ok
+test tracked_is_not_copy_just_because_type_param_is_clone ... ok
+test tracked_in_ghost1 ... ok
+test tracked_empty_union_uninitialized_3 ... ok
+test tracked_empty_union_uninitialized_4 ... ok
+test tracked_new_issue870 ... ok
+test tracked_new2_issue870 ... ok
+test tracked_static_ref_checks_outlives ... ok
+test tracked_is_copy_if_type_param_is_copy ... ok
+test two_phase_with_overloaded_compound_assignment_operator ... ok
+test two_phase ... ok
+test trait_depending_on_view_issue966 ... ok
+test use_arc_as_receiver_issue1311 ... ok
+
+test result: ok. 94 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.42s
+

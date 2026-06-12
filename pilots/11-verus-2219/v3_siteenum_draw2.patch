@@ -1,0 +1,57 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..3c69740 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,11 +845,16 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref func, ref mut target, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+ 
++            if crate::verus::mir_operand_is_erased_ghost_value(func) {
++                continue;
++            }
++
+             let ty = destination.ty(&self.local_decls, self.tcx).ty;
+             let ty_is_inhabited = ty.is_inhabited_from(
+                 self.tcx,
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..c180d08 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -7,6 +7,7 @@ use rustc_hir::QPath;
+ use rustc_hir::def::Res;
+ use rustc_hir::def_id::{DefId, LocalDefId};
+ use rustc_middle::hir::place::{Place, Projection, ProjectionKind};
++use rustc_middle::mir;
+ use rustc_middle::middle::region;
+ use rustc_middle::mir::FakeReadCause;
+ use rustc_middle::thir;
+@@ -133,6 +134,22 @@ fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 
++pub(crate) fn mir_operand_is_erased_ghost_value<'tcx>(operand: &mir::Operand<'tcx>) -> bool {
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++
++    let mir::Operand::Constant(constant) = operand else {
++        return false;
++    };
++
++    let ty = constant.const_.ty();
++    match ty.kind() {
++        TyKind::FnDef(fn_def_id, _) => *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id,
++        _ => false,
++    }
++}
++
+ /// Our erasure scheme will fail if this query runs too early, before we initialize the
+ /// VerusErasureCtxt. However, there are some items where this happens
+ /// intentionally (e.g., for consts, which may be evaluated during type-checking).

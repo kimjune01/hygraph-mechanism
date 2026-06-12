@@ -1,0 +1,36 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..bf2a02a 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,9 +845,17 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref mut target, destination, ref func, .. } = term.kind
++            else {
+                 continue;
+             };
++            if let Some(erasure_ctxt) = crate::verus::get_verus_erasure_ctxt_option()
++                && let Operand::Constant(func_const) = func
++                && let ty::FnDef(fn_def_id, _) = func_const.const_.ty().kind()
++                && *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id
++            {
++                continue;
++            }
+             let Some(target_bb) = *target else { continue };
+ 
+             let ty = destination.ty(&self.local_decls, self.tcx).ty;
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..1d094e9 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -129,7 +129,7 @@ fn get_verus_erasure_ctxt() -> Arc<VerusErasureCtxt> {
+         .clone()
+ }
+ 
+-fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
++pub(crate) fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 

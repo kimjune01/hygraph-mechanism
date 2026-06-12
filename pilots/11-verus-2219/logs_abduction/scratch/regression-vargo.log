@@ -1,0 +1,788 @@
+RUN mut_refs
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.20s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.99s
+     Running tests/mut_refs.rs (target/release/deps/mut_refs-817a65966a4acd4a)
+
+running 85 tests
+test backwards_compat_fail ... ok
+test backwards_compat_fail2 ... ok
+test calls_unwind_extra_cfg_edge ... ok
+test backwards_compat ... ok
+test auto_coerce_to_shr_borrow ... ok
+test backwards_compat_unwrapped_param ... ok
+test call_with_args_that_dont_return ... ok
+test assign_op_to_mut_ref ... ok
+test compound_op_that_doesnt_return ... ok
+test control_flow_bin_ops_short_circuiting ... ok
+test control_flow_conditional_2 ... ok
+test control_flow_conditional_with_pair ... ok
+test control_flow_never ... ok
+test control_flow_conditional ... ok
+test copy_from_behind_mut_ref_doesnt_leave_anything_uninitialized ... ok
+test ctor_with_args_that_dont_return ... ok
+test fin_keyword2 ... ok
+test false_two_phase ... ok
+test false_two_phase2 ... ok
+test fin_keyword ... ok
+test control_flow_bin_ops_short_circuiting2 ... ok
+test ctor_with_update_tail ... ok
+test has_resolved_for_struct_with_drop_impl ... ok
+test let_decl_partial_move ... ok
+test mut_ref_not_extensional ... ok
+test mut_ref_snapshot ... ok
+test mut_ref_with_implicit_box_deref ... ok
+test overwrite_during_indexing2 ... ok
+test overwrite_during_ctor_tail ... ok
+test overwrite_during_scrutinee ... ok
+test overwrite_during_ctor_tail_fails ... ok
+test overwrite_in_slice_index_after_index_assign ... ok
+test overwrite_in_slice_index_after_index_mut_ref ... ok
+test overwrite_two_phase_borrow ... ignored
+test overwrite_in_slice_index_after_index_read ... ok
+test overwrite_reborrowed_mut_ref_match_guard ... ok
+test overwrite_reborrowed_mut_ref ... ok
+test overwrite_during_indexing ... ok
+test overwrite_during_indexing2_fails ... ok
+test resolution_move_from_array_error ... ok
+test place_behind_mut_ref_doesnt_resolve ... ok
+test overwrite_vec_while_indexing ... ok
+test resolution_move_from_array_error2 ... ok
+test resolution_move_from_array_error3 ... ok
+test overwrite_during_scrutinee_fails ... ok
+test resolve_places_with_projection_types ... ok
+test struct_mut_ref_pair_immut_ref ... ok
+test shr_bor_of_pair_of_mut_bor ... ok
+test test_after_borrow_bad_expr ... ok
+test test_after_borrow_proph ... ok
+test place_that_doesnt_return ... ok
+test test_fin_proph ... ok
+test test_after_borrow_ok ... ok
+test overwrite_during_indexing_fails ... ok
+test test_mut_ref_future_proph ... ok
+test test_basic ... ok
+test overwrite_vec_while_indexing2 ... ok
+test test_moves_via_fn_arg ... ok
+test test_moves_via_let_decl ... ok
+test overwrite_vec_during_indexing3 ... ok
+test test_param_nested ... ok
+test test_param_nested_with_return_stmt ... ok
+test test_nested_mut_refs ... ok
+test test_resolved_proph ... ok
+test test_params ... ok
+test test_paren_ctors_with_mut_refs ... ok
+test test_params_with_reborrow ... ok
+test test_spec_functions_ok ... ok
+test two_phase_borrow_basic ... ok
+test two_phase_borrow_resolving ... ok
+test test_resolve_axioms_in_context ... ok
+test two_phase_ctor ... ok
+test two_phase_lifetime_error ... ok
+test two_phase_lifetime_error_generic ... ok
+test test_resolved_axioms ... ok
+test temporaries_with_semantically_trivial_ops ... ok
+test test_structs_and_boxes ... ok
+test two_phase_struct ... ok
+test two_phase_proof_code ... ok
+test two_phase_tuple ... ok
+test test_structs_and_boxes_double_nested ... ok
+test two_phase_receiver_struct ... ok
+test uninitialized ... ok
+test two_phase_arrays_slices ... ok
+test two_phase_vec ... ok
+
+test result: ok. 84 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.80s
+
+RUN mut_refs_closures
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.89s
+     Running tests/mut_refs_closures.rs (target/release/deps/mut_refs_closures-755abe104d350074)
+
+running 10 tests
+test closure_resolve_field_move ... ok
+test closure_resolve_basic_move2 ... ok
+test spec_capture_of_mut_ref ... ignored
+test mut_refs_in_closure ... ok
+test closure_resolve_basic_move_of_closure_param ... ok
+test closure_resolve_basic_move ... ok
+test closure_resolve_overlapping_moves ... ok
+test proof_closure_resolve_basic_move ... ok
+test closure_resolve_nested_move ... ok
+test closure_resolve_params ... ok
+
+test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.12s
+
+RUN mut_refs_libs
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.05s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.89s
+     Running tests/mut_refs_libs.rs (target/release/deps/mut_refs_libs-1b6b279c82ddd2cc)
+
+running 7 tests
+test test_option_as_mut_spec ... ok
+test test_option_insert_and_get_or_insert ... ok
+test test_options_as_mut_slice ... ok
+test test_vec_of_mut_refs ... ok
+test test_index_out_of_bounds ... ok
+test test_vec_index_mut_ref ... ok
+test test_vec_index_assign ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s
+
+RUN mut_refs_loops
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.84s
+     Running tests/mut_refs_loops.rs (target/release/deps/mut_refs_loops-0b929b7589942998)
+
+running 23 tests
+test future_preserved_in_loop_fails1 ... ok
+test future_preserved_in_loop ... ok
+test control_flow_loops ... ok
+test control_flow_while_loops ... ok
+test control_flow_loops_nested ... ok
+test control_flow_while_loops_nested ... ok
+test future_preserved_in_loop_needs_inv ... ok
+test future_preserved_in_loop_fails2 ... ok
+test future_preserved_in_loop_fails3 ... ok
+test future_preserved_in_loop_nested ... ok
+test future_preserved_in_loop_fails4 ... ok
+test loop_vs_while_loop ... ok
+test loops_resolve_depends_on_condition_branch ... ok
+test no_iso_future_preserved_in_loop_fails1 ... ok
+test no_iso_future_preserved_in_loop_fails2 ... ok
+test no_iso_future_preserved_in_loop_fails4 ... ok
+test no_iso_future_preserved_in_loop_fails3 ... ok
+test loops_resolve_depends_on_condition_branch2 ... ok
+test no_iso_future_preserved_in_loop_needs_inv ... ok
+test no_iso_future_preserved_in_loop_nested ... ok
+test while_loops_with_mutation_in_condition ... ok
+test for_loops ... ok
+test for_loops_loop_isolation_false ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+RUN mut_refs_modes
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.97s
+     Running tests/mut_refs_modes.rs (target/release/deps/mut_refs_modes-bd54fa67078c5b37)
+
+running 98 tests
+test deref_ghost_mut_ref_is_ghost ... ok
+test cant_move_out_of_tracked_location ... ok
+test ghost_auto_deref_2 ... ok
+test dont_resolve_ghost_field2 ... ok
+test dont_resolve_ghost_field ... ok
+test ghost_auto_deref_4 ... ok
+test ghost_auto_deref_3 ... ok
+test ghost_auto_deref_1 ... ok
+test ghost_overloaded_deref_2 ... ok
+test ghost_overloaded_deref_3 ... ok
+test ghost_auto_deref_lifetime ... ok
+test ghost_overloaded_deref_4 ... ok
+test ghost_overloaded_deref_lifetime ... ok
+test ghost_overloaded_deref_1 ... ok
+test modify_exec_place_in_proof_code ... ok
+test ghost_places_dont_resolve ... ok
+test ghost_places_dont_count_as_moves ... ok
+test modify_exec_place_in_proof_code2 ... ok
+test ghost_places_dont_resolve2 ... ok
+test modify_ghost_place_in_assert_by ... ok
+test modify_ghost_fields_doesnt_reinitialize1 ... ok
+test modify_ghost_place_in_exec_code ... ok
+test modify_ghost_fields_doesnt_reinitialize2 ... ok
+test modify_tracked_place_in_exec_code ... ok
+test modify_ghost_fields_through_mut_refs ... ok
+test modify_ghost_wrapped_type_in_proof_code ... ok
+test modify_ghost_place_in_proof_code ... ok
+test deref_generic_use_err_deref_tracked ... ok
+test mut_borrow_in_ghost_decl ... ignored
+test deref_generic_use_err_deref_mut_ghost ... ok
+test deref_generic_use_err_deref_ghost ... ok
+test mut_borrow_in_assert_by ... ok
+test deref_generic_use_err_deref_mut_tracked ... ok
+test mut_borrow_in_spec_fn ... ok
+test modify_tracked_place_in_proof_code ... ok
+test mut_borrow_of_ghost_local_in_exec_fn ... ok
+test mut_borrow_of_ghost_local_in_proof_block ... ok
+test modify_tracked_type_in_proof_code ... ok
+test mut_borrow_of_ghost_local_in_proof_fn ... ok
+test modify_tracked_wrapped_type_in_proof_code ... ok
+test mut_borrow_of_tracked_local_in_exec_fn ... ok
+test mut_borrow_lifetime_error ... ok
+test mut_borrow_lifetime_error2 ... ok
+test mut_borrow_of_exec_local_in_tracked_local_decl ... ok
+test mut_ref_ghost_place_in_proof_code ... ok
+test mut_borrow_of_exec_local_in_proof_block_to_tracked ... ok
+test no_mut_ref_through_ghost_mut_ref ... ok
+test no_mut_ref_through_ghost_mut_ref2 ... ok
+test no_mut_ref_through_ghost_mut_ref3 ... ok
+test no_mutation_through_ghost_mut_ref ... ok
+test no_mutation_through_ghost_mut_ref2 ... ok
+test mut_borrow_of_tracked_local_in_proof_block_to_ghost ... ok
+test old_mut_ref_auto_deref_mode_err_ghost_borrow ... ok
+test mut_borrow_of_tracked_local_in_proof_fn ... ok
+test no_mutation_through_ghost_mut_ref3 ... ok
+test old_mut_ref_auto_deref_mode_err_ghost_borrow_mut ... ok
+test mut_ref_tracked_place_in_proof_code ... ok
+test mut_ref_tracked_place_in_proof_code2 ... ok
+test old_mut_ref_auto_deref_mode_err_tracked_borrow ... ok
+test old_mut_ref_auto_deref_mode_err_tracked_borrow_mut ... ok
+test old_mut_ref_overloaded_deref_mode_err_ghost_borrow ... ok
+test old_mut_ref_overloaded_deref_mode_err_tracked_borrow ... ok
+test old_mut_ref_overloaded_deref_mode_err_tracked_borrow_mut ... ok
+test old_mut_ref_overloaded_deref_mode_err_ghost_borrow_mut ... ok
+test read_from_borrowed_ghost_location_and_then_assign_to_mut_ref ... ok
+test old_mut_ref_ghost_overloaded_deref_1 ... ok
+test old_mut_ref_ghost_auto_deref_1 ... ok
+test reading_ghost_field_is_not_move ... ok
+test read_through_ghost_mut_ref_ok ... ok
+test old_mut_ref_tracked_auto_deref_1 ... ok
+test resolve_tracked_param_but_not_ghost_param ... ok
+test old_mut_ref_tracked_overloaded_deref_1 ... ok
+test tracked_auto_deref_2 ... ok
+test tracked_auto_deref_3 ... ok
+test tracked_deref_explicit ... ok
+test tracked_deref_mut_explicit ... ok
+test tracked_overloaded_deref_2 ... ok
+test tracked_auto_deref_lifetime_1 ... ok
+test tracked_overloaded_deref_3 ... ok
+test tracked_auto_deref_lifetime_2 ... ok
+test tracked_auto_deref_1 ... ok
+test tracked_swap_requires_non_exec_type ... ignored
+test struct_with_ghost_and_tracked_fields ... ok
+test tracked_places_lifetime_error2 ... ok
+test tracked_overloaded_deref_lifetime_1 ... ok
+test tracked_overloaded_deref_lifetime_2 ... ok
+test tracked_places_lifetime_error ... ok
+test tracked_places_lifetime_error3 ... ok
+test tracked_overloaded_deref_1 ... ok
+test wrapped_mut_ref_params_resolved ... ok
+test write_in_proof_mode_with_decoration_6 ... ok
+test wrapped_params_reborrow ... ok
+test write_in_proof_mode_with_decoration_3 ... ok
+test wrapped_params ... ok
+test write_in_proof_mode_with_decoration_4 ... ok
+test write_in_proof_mode_with_decoration_1 ... ok
+test write_in_proof_mode_with_decoration_2 ... ok
+test write_in_proof_mode_with_decoration_5 ... ok
+
+test result: ok. 96 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.82s
+
+RUN mut_refs_old
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.86s
+     Running tests/mut_refs_old.rs (target/release/deps/mut_refs_old-217332e1dfaf4db2)
+
+running 21 tests
+test old_in_closure_referring_to_outer_param ... ignored
+test old_of_local ... ok
+test old_containing_fin ... ok
+test old_in_spec_fn ... ok
+test old_in_spec_fn_sig ... ok
+test old_of_spec_closure_param ... ok
+test postcondition_missing_old_closure ... ok
+test postcondition_missing_old ... ok
+test postcondition_missing_old_for_tuple ... ok
+test test_assert_bv ... ignored
+test fin_containing_old ... ok
+test postcondition_old_fin_tuple_ok_2 ... ok
+test test_assert_nonlinear ... ignored
+test nested_mut_refs ... ok
+test old_in_body ... ok
+test old_in_closure_body ... ok
+test postcondition_missing_old_for_return_is_ok ... ok
+test postcondition_old_fin_tuple_ok ... ok
+test test_assert_by ... ok
+test unwrap_params ... ok
+test test_assert_forall ... ok
+
+test result: ok. 18 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+RUN mut_refs_patterns
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.90s
+     Running tests/mut_refs_patterns.rs (target/release/deps/mut_refs_patterns-bc1887ba340a0a61)
+
+running 70 tests
+test decl_test_or_patterns ... ok
+test basic_let_stmt_mut_ref ... ok
+test basic_match_mut_ref ... ok
+test basic_let_else_mut_ref ... ok
+test binders_in_pattern_ghost_vs_no_ghost ... ok
+test complex_nesting_enum_1_variant ... ok
+test binders_in_pattern_copy_vs_no_copy ... ok
+test complex_nesting_enum_2_variant ... ok
+test enum_conditional_resolution ... ok
+test enum_conditional_resolution_nested_with_mut_refs ... ok
+test enum_conditional_resolution_with_mut_refs ... ok
+test enum_conditional_resolution_with_mut_refs_and_moves ... ok
+test enum_immut_refs_mut_refs2 ... ok
+test enum_conditional_resolution_nested ... ok
+test enum_mut_refs_immut_refs ... ok
+test enum_immut_refs_mut_refs ... ok
+test enum_take_mut_refs_to_same_var_in_both_branches ... ok
+test let_decl_complex_nesting_enum_1_variant ... ok
+test let_decl_mut_ref_to_struct_with_immut_refs ... ok
+test let_else_cfg_reachability ... ok
+test let_decl_on_a_field_place ... ok
+test let_else_complex_mut_ref_combos ... ok
+test let_else_explicit_ref_mut_binding ... ok
+test let_else_complex_nesting_enum_1_variant ... ok
+test let_else_match_on_a_field_via_underscore ... ok
+test let_else_on_a_field_place_via_dot ... ok
+test let_explicit_ref_mut_binding ... ok
+test mut_ref_ghost_atbinder_forbidden ... ok
+test mut_ref_ghost_binder_forbidden ... ok
+test match_on_a_field_via_underscore ... ok
+test match_explicit_ref_mut_binding ... ok
+test match_on_a_field_place_via_dot ... ok
+test mut_ref_ghost_binder_forbidden_mut_ref_field ... ok
+test mut_ref_ghost_binder_forbidden_trk_type ... ok
+test match_complex_mut_ref_combos ... ok
+test mut_ref_ghost_binder_forbidden_ghost_type ... ok
+test mut_ref_ghost_match_ok_when_no_binder ... ok
+test mut_ref_tracked_atbinder_forbidden ... ok
+test mut_ref_tracked_binder_forbidden ... ok
+test mut_ref_ghost_unwrap ... ok
+test mut_ref_tracked_unwrap ... ok
+test mut_ref_to_struct_with_immut_refs ... ok
+test mut_ref_to_enum_with_immut_refs ... ok
+test not_support_pattern_mut_ref_binding_with_guard ... ok
+test not_support_let_pattern_mut_ref_binding_with_or_pat ... ok
+test mut_ref_with_range_and_const_patterns ... ok
+test not_support_pattern_mut_ref_binding_with_or_pat ... ok
+test let_else_ref_mut_inside_immut_ref_no_lifetime ... ok
+test mut_refs_with_if_let ... ok
+test no_resolve_ghost_binders ... ok
+test let_else_ref_mut_inside_at_binder ... ok
+test let_else_ref_mut_inside_immut_ref ... ok
+test or_patterns_with_conditional_moves ... ok
+test or_patterns_with_moves_in_same_place ... ok
+test or_patterns_with_conditional_moves2 ... ok
+test partial_move_out_of_enum ... ok
+test partial_move_out_of_enum_no_lifetime ... ok
+test partial_move_out_of_enum2 ... ok
+test partial_move_out_of_enum3 ... ok
+test partial_move_from_enum_with_mut_ref ... ok
+test ref_mut_binding_and_nothing_else ... ok
+test partial_move_from_pair_with_mut_ref ... ok
+test ref_mut_inside_at_binder ... ok
+test ref_mut_inside_immut_ref ... ok
+test struct_immut_refs_mut_refs ... ok
+test struct_mut_refs_immut_refs ... ok
+test ref_mut_inside_immut_ref_no_lifetime ... ok
+test side_effects_in_match_arg ... ok
+test test_match_guards ... ok
+test test_or_patterns ... ok
+
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.89s
+
+RUN mut_refs_slices_arrays
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.05s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.87s
+     Running tests/mut_refs_slices_arrays.rs (target/release/deps/mut_refs_slices_arrays-938c5721c2eb6f4b)
+
+running 20 tests
+test control_flow_ordering5 ... ok
+test control_flow_ordering_overflow_error ... ok
+test array_of_mut_refs ... ok
+test control_flow_ordering4 ... ok
+test control_flow_ordering3 ... ok
+test array_overflow ... ok
+test idx_nonproph ... ok
+test control_flow_ordering_rhs_first_resolution_inf ... ok
+test control_flow_ordering2 ... ok
+test mut_ref_unsizing_coercion ... ok
+test control_flow_ordering_rhs_first_resolution_inf_compound ... ok
+test array_basic ... ok
+test new_mut_ref ... ok
+test control_flow_ordering ... ok
+test slice_of_mut_refs ... ok
+test slices_assign_resolving_basic ... ok
+test slice_overflow ... ok
+test slices_lib_first_last_mut ... ok
+test slice_basic ... ok
+test slices_lib_split_at ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s
+
+RUN mut_refs_temporaries
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.87s
+     Running tests/mut_refs_temporaries.rs (target/release/deps/mut_refs_temporaries-b364ecf203e24e2e)
+
+running 18 tests
+test resolving_and_side_effects_in_ghost_temporary ... ok
+test assign_eval_ordering_with_temporary ... ok
+test mut_refs_of_mut_refs ... ok
+test temporary_place_in_assign_op_with_overflow ... ok
+test temporary_place_in_assign ... ok
+test temporary_place_in_assign_op ... ok
+test temporary_place_in_let_stmt ... ok
+test temporary_place_ctor_update_tail ... ok
+test temporary_place_in_let_stmt_with_pattern ... ok
+test temporary_place_in_match ... ok
+test temporary_place_in_match_with_mut ... ok
+test temporary_place_in_move ... ok
+test temporary_place_in_match_with_mut_and_option ... ok
+test temporary_place_in_match_with_option ... ok
+test temporary_place_in_shared_borrow ... ok
+test temporary_place_in_mut_borrow ... ok
+test temporary_place_unused ... ok
+test temporary_place_let_stmt_with_mut_pat ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+RUN mut_refs_time_travel
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.90s
+     Running tests/mut_refs_time_travel.rs (target/release/deps/mut_refs_time_travel-23c51639a6cd83c6)
+
+running 44 tests
+test borrow_field_and_use_different_field ... ignored
+test borrow_field_and_use_different_field2 ... ignored
+test cant_cheat_prophecy_with_assign_in_has_resolved ... ignored
+test cant_cheat_prophecy_with_assign_in_after_borrow ... ok
+test borrow_field_and_use_whole ... ok
+test assert_forall_use ... ok
+test borrow_field_and_use_field ... ok
+test borrow_whole_and_use_field ... ok
+test generic_instantiation ... ok
+test generic_instantiation2 ... ok
+test generic_instantiation3 ... ok
+test misc_borrows_and_reborrows ... ok
+test param ... ok
+test param_old_use_ok ... ok
+test double_closure_param ... ok
+test closure_capture ... ok
+test closure_param ... ok
+test closure_capture_in_requires ... ok
+test closure_capture_let_ghost ... ok
+test closure_capture_in_ensures ... ok
+test closure_local ... ok
+test quant1 ... ok
+test ref_mut_binding_in_match ... ok
+test quant3 ... ok
+test quant2 ... ok
+test quant4 ... ok
+test ref_mut_binding_in_if_let ... ok
+test ref_mut_binding_in_pat_let_decl ... ok
+test spec_closure_use ... ok
+test test_basic_fails ... ok
+test test_basic_fails_let_ghost ... ok
+test test_let_else ... ok
+test test_borrow_and_pattern_match ... ok
+test test_borrow_and_pattern_match2 ... ok
+test test_basic_reborrow_fails ... ok
+test test_ref_mut_binding_fails ... ok
+test test_ok_with_has_resolved ... ok
+test two_phase1 ... ok
+test two_phase2 ... ok
+test two_phase3 ... ok
+test test_ok_with_after_borrow ... ok
+test two_phase4 ... ok
+test two_phase5 ... ok
+test two_phase_closure_call ... ok
+
+test result: ok. 41 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.47s
+
+RUN mut_refs_unions
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.87s
+     Running tests/mut_refs_unions.rs (target/release/deps/mut_refs_unions-5799936cf17694b5)
+
+running 18 tests
+test eval_order_union_array_issue1 ... ignored
+test eval_order_union_slice_issue1 ... ignored
+test eval_order_union_array_issue2 ... ok
+test test_basic ... ok
+test test_match ... ok
+test test_temporary ... ok
+test eval_order_union_array_issue4 ... ok
+test eval_order_union_slice_issue2 ... ok
+test eval_order_union_slice_issue4 ... ok
+test eval_order_union_array_issue3 ... ok
+test eval_order_union_slice_issue3 ... ok
+test test_wrong_variant_assign ... ok
+test ctor_update_tail ... ok
+test array_plus_union_field ... ok
+test test_wrong_variant_assign_nested ... ok
+test test_wrong_variant_mut_ref ... ok
+test union_has_resolved ... ok
+test union_with_mut_ref_in_fields ... ok
+
+test result: ok. 16 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.49s
+
+RUN mutable_params
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.86s
+     Running tests/mutable_params.rs (target/release/deps/mutable_params-5fd3a965b5234278)
+
+running 11 tests
+test no_confusion_decreases_clause ... ok
+test mutation_nested_loop ... ok
+test no_confusion_ensures_recommend_check ... ok
+test mut_param_with_loops_iso_false ... ok
+test mut_param_with_loops ... ok
+test mut_param_on_closure_with_loops_iso_false ... ok
+test mutation_conditional_cases ... ok
+test mut_param_on_closure_with_loops ... ok
+test no_confusion_ensures_recommend_check_closure ... ok
+test no_confusion_unwind_spec ... ok
+test no_confusion_invariants_spec ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+RUN refs
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+    Finished `release` profile [optimized] target(s) in 0.06s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+    Finished `release` profile [optimized] target(s) in 0.03s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+    Finished `release` profile [optimized] target(s) in 0.04s
+[1;34mvargo info: [0m[34mvstd fresh[0m
+[1;34mvargo info: [0m[34mrebuilding: done (release)[0m
+   Compiling rust_verify_test v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify_test)
+    Finished `release` profile [optimized] target(s) in 0.89s
+     Running tests/refs.rs (target/release/deps/refs-3c351bbb06abacb5)
+
+running 38 tests
+test mutref_arg_ref_unsupported ... ok
+test deref_allowed_but_must_be_declared ... ok
+test test_mut_ref_arg_invalid_spec_decreases ... ok
+test test_mut_ref_arg_invalid_spec ... ok
+test test_mut_ref_arg_proof_pass ... ignored
+test test_mut_ref_arg_proof_fail ... ok
+test mut_ref_coerce_to_ref_with_old_issue671 ... ok
+test test_mut_ref_arg_exec ... ok
+test test_mut_ref_arg_self_complex_pass ... ok
+test test_mut_ref_arg_self_pass_1 ... ok
+test test_mut_ref_arg_self_fail_1 ... ok
+test test_mut_ref_arg_self_fail_2 ... ok
+test test_mut_ref_arg_spec ... ok
+test test_mut_ref_arg_self_spec ... ok
+test test_mut_ref_arg_self_pass_2 ... ok
+test test_mut_ref_field_and_update_pass ... ok
+test test_mut_ref_field_pass_1 ... ok
+test test_mut_ref_field_pass_2 ... ok
+test test_mut_ref_old_shadow ... ok
+test test_mut_ref_forward ... ok
+test test_mut_ref_generic_1 ... ok
+test test_mut_ref_shadow ... ok
+test test_mut_ref_unsupported_1 ... ignored
+test test_mut_ref_trigger_0 ... ok
+test test_mut_ref_typing_invariant ... ok
+test test_overloaded_deref ... ok
+test deref_vec_alone1 ... ok
+test deref_vec_fails ... ok
+test test_mut_ref_old_trigger ... ok
+test deref_vec_alone2 ... ok
+test test_ref_1 ... ok
+test test_ref_0 ... ok
+test deref_vec_ok ... ok
+test test_regression_115_mut_ref_eval_order ... ok
+test test_regression_115_mut_ref_pattern_case_1 ... ok
+test test_regression_115_mut_ref_pattern_case_2 ... ok
+test test_return_ref_0 ... ok
+test test_return_ref_named_lifetime ... ok
+
+test result: ok. 36 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.34s
+

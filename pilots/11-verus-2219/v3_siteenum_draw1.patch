@@ -1,0 +1,51 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86..4e3b795 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -845,12 +845,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref func, ref mut target, destination, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+ 
+             let ty = destination.ty(&self.local_decls, self.tcx).ty;
++            let is_verus_erased_ghost_value_call =
++                crate::verus::is_erased_ghost_value_fn_ty(func.ty(&self.local_decls, self.tcx));
+             let ty_is_inhabited = ty.is_inhabited_from(
+                 self.tcx,
+                 self.parent_module,
+@@ -876,7 +879,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     true
+                 };
+ 
+-            if !ty_is_inhabited {
++            if !ty_is_inhabited && !is_verus_erased_ghost_value_call {
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..00ddda3 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -133,6 +133,16 @@ fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 
++pub(crate) fn is_erased_ghost_value_fn_ty(ty: Ty<'_>) -> bool {
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++    match ty.kind() {
++        TyKind::FnDef(fn_def_id, _) => *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id,
++        _ => false,
++    }
++}
++
+ /// Our erasure scheme will fail if this query runs too early, before we initialize the
+ /// VerusErasureCtxt. However, there are some items where this happens
+ /// intentionally (e.g., for consts, which may be evaluated during type-checking).
