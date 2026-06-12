@@ -116,6 +116,24 @@ codex-CLI). (2) n=1 per cell. (3) "lift" = narrow -> wide-but-broken, NOT narrow
 wide is still broken on divergence. (4) the wide-but-broken vs narrow boundary is the only model
 difference observed; on the divergence arm the models are tied (both fail).
 
+## NEXT RUN (open thread, not yet run on any box)
+
+gate2-Fable: hand Fable the divergence DIAGNOSIS (gate2_arm.txt + the gate2/sealed held-outs as the
+calibration it lacked) and ask whether it can IMPLEMENT the fix. This is the cross-family completion of
+codex's outcome C (codex gate2 arm is the one still grinding on the other machine).
+
+Why it is sharper after the v7 finding: Fable's miss was specifically CALIBRATION, not enumeration (it
+built the discriminating case v7 and mislabeled it). gate2 supplies exactly the missing label. So the
+run distinguishes two hypotheses:
+- given the correct label, Fable implements the ghost-vs-genuine-divergence discriminator => the wall
+  was calibration (a near-A; the model can do the XOR once told where it is wrong).
+- given the label, Fable still oscillates / cannot encode it => implementation wall, cross-family
+  (same failure shape as codex's gate2 outcome).
+
+State: the M4 Pro (this box) ran the two minimal variants (weak minimal_v3_fable + controlled
+codex-exact minimal_v3), NOT gate2. gate2-Fable is the next run when a box is spun back up. This box
+stays cool for now.
+
 ## 2026-06-12 - TRACE analysis of the weak draw: the v7 self-mislabel (calibration is the wall, not enumeration)
 
 Read the full headless session transcript of the weak draw
