@@ -23,7 +23,7 @@ flips base->reject) to defeat the vendored-crate stale-binary trap that produced
 | codex gpt-5.5 | case-check tool (execution-gated) | codex-CLI | 269 | all ok | REJECT (over) | WIDE-BUT-BROKEN |
 | Fable | self_verifier (strong) | Agent | 269 | all ok | REJECT (over) | WIDE-BUT-BROKEN |
 | Fable | minimal_v3_fable (weak) | headless | 269 | all ok | REJECT (over) | WIDE-BUT-BROKEN |
-| Fable | minimal_v3 codex-exact (controlled) | headless | running | - | - | pending |
+| Fable | minimal_v3 codex-exact (controlled) | headless | 269 | all ok | REJECT (over) | WIDE-BUT-BROKEN |
 
 Reading: prompt-method engineering lifted neither model (codex 0/18 narrow; Fable strong ~ weak,
 identical external grade). What lifted: the execution-gated tool for codex (114 -> 269), and raw
@@ -77,6 +77,44 @@ with prompt held constant, not pure weights).
 
 Expected read on completion: same prompt, codex NARROW (chg=114) vs Fable WIDE (chg=269) = model lift
 with prompt controlled. Result + verified changed-count to be appended here when the run finishes.
+
+## 2026-06-12 01:20 - Controlled ablation RESULT: model lift confirmed (prompt held constant).
+
+Fable on codex's EXACT minimal_v3.txt, headless, ~33 min, clean base start. Patch fable_ctrl.patch
+(334-line diff, 184 ins, 4 files: erase.rs, builder/mod.rs, verus.rs, verus_expr.rs). Identity-verified
+driver fp fde9a107 (reproduced after target-verus moved aside; t1 base->reject).
+
+External forced-fresh grade (IDENTICAL battery to the weak draw):
+- t1 REJECT, t2 REJECT, h2_assoc REJECT, h2_generic_nested REJECT  (bug arm GENERAL, incl. both
+  out-of-grammar held-outs)
+- t3 REJECT, ho5 REJECT  (over-reject genuine proof divergence)
+- seal_exec VERIFY (correct exec divergence), seal_proofdiv REJECT (over-reject ghost divergence)
+- case-check: changed=269 exactly, changed-outside-bugset=0, valid-preserve-rejected=0, pass=true,
+  mishandles=0, crash=0
+
+THE ABLATION (prompt held constant at minimal_v3.txt):
+- codex gpt-5.5  -> NARROW  (chg=114, pass=false; stayed on the !-slice)
+- Fable          -> WIDE-BUT-BROKEN (chg=269, pass=true; general on bug arm + both OOG held-outs)
+Swapping ONLY the model lifts narrow -> wide. This is the model effect, isolated, with the prompt
+identical and the keepalive/dropped-line confounds removed.
+
+Mechanism again MODE/ghostness ("makes CFG-pruning mode-aware", new CallRuntimeErase: proof=Erase,
+exec=Keep). Different file set from the weak draw (verus_expr.rs instead of fn_call_to_vir.rs etc.) but
+same method and same external grade. So across THREE Fable draws (self_verifier strong, minimal weak,
+minimal codex-exact controlled) the result is invariant: general-on-bug, broken-on-divergence.
+
+STANDING PICTURE (all prompt-controlled where it matters):
+- Prompt METHOD: no lift on either model (codex 0/18 narrow across 6 methods; Fable strong ~ weak ~
+  codex-exact, all wide-but-broken, all chg=269).
+- MODEL: the lift (Fable > codex), now prompt-controlled (same minimal_v3.txt: 114 vs 269).
+- TOOL: lifted codex 114 -> 269, i.e. to where Fable already lands with no tool.
+- The divergence arm is the wall for ALL of them (model-invariant, prompt-invariant, tool-invariant);
+  only the human #2501 clears it.
+
+Honest caveats: (1) model+harness confound remains (codex-CLI vs claude-headless; cannot run Fable in
+codex-CLI). (2) n=1 per cell. (3) "lift" = narrow -> wide-but-broken, NOT narrow -> correct; Fable's
+wide is still broken on divergence. (4) the wide-but-broken vs narrow boundary is the only model
+difference observed; on the divergence arm the models are tied (both fail).
 
 ## 2026-06-12 - TRACE analysis of the weak draw: the v7 self-mislabel (calibration is the wall, not enumeration)
 
