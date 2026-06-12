@@ -7,7 +7,7 @@
 set -uo pipefail
 WT=/Users/junekim/Documents/verus-p11
 PILOT=/Users/junekim/Documents/hygraph-mechanism/pilots/11-verus-2219
-CC=/tmp/case-check
+CC="$(cd "$(dirname "$0")" && pwd)"   # this tools dir (case-check.py + calibration.json)
 BASE=23dc6e754fef0d238db808dad02cbe8e3d72f2b3
 export PATH="$WT/tools/vargo/target/release:/tmp/rustup-shims:$PATH"; unset RUSTC RUSTUP_TOOLCHAIN
 OUT="${1:?usage: OUT.jsonl ARTIFACT... | OUT.jsonl @listfile}"; shift
@@ -39,14 +39,14 @@ for ART in "$@"; do
   start=$(date +%s)
   find source/rustc_mir_build/src source/rust_verify/src -name '*.rs' -exec touch {} + 2>/dev/null
   ( cd "$WT/source" && vargo build --release ) >/tmp/cr-build.log 2>&1; bexit=$?
-  bmtime=$(stat -f %m "$DRIVER" 2>/dev/null || echo 0); rebuilt=$([ "$bmtime" -ge "$start" ] && echo true || echo false)
+  bmtime=$(stat -f %m "$DRIVER" 2>/dev/null || stat -c %Y "$DRIVER" 2>/dev/null || echo 0); rebuilt=$([ "$bmtime" -ge "$start" ] && echo true || echo false)
   binfp=$(shasum -a 256 "$DRIVER" 2>/dev/null | cut -c1-16)   # content fingerprint = true identity
   if [ $bexit -ne 0 ]; then
     printf '{"artifact":"%s","patch_sha":"%s","patch_lines":%s,"toolchain":"%s","applied":"%s","build_exit":%s,"rebuilt":%s,"bin_fp":"%s","battery":null,"casecheck":null}\n' \
       "$aid" "$psha" "$plines" "$toolchain" "$applied" "$bexit" "$rebuilt" "$binfp" >> "$OUT"; continue; fi
   t1=$(grade_one "$PILOT/oracle/t1_issue2219.rs"); t2=$(grade_one "$PILOT/oracle/t2_empty_enum.rs"); t3=$(grade_one "$PILOT/oracle/t3_legit_divergence.rs")
   ha=$(grade_one "$PILOT/heldout2/h2_assoc_proj.rs"); hn=$(grade_one "$PILOT/heldout2/h2_generic_nested.rs"); ho=$(grade_one "$PILOT/heldout/ho5_real_divergence_sound.rs")
-  cc=$(cd "$CC" && python3 case-check.py --candidate-verus "$BIN" --jobs 8 2>/dev/null | grep -oE 'pass=(true|false)|changed=[0-9]+|mishandles=[0-9]+|valid-preserve-rejected=[0-9]+|valid-bug-still-accepted=[0-9]+|crash=[0-9]+|changed-outside-bugset=[0-9]+' | tr '\n' ' ')
+  cc=$(cd "$CC" && python3 case-check.py --candidate-verus "$BIN" --calibration "$CC/calibration.json" --jobs 8 2>/dev/null | grep -oE 'pass=(true|false)|changed=[0-9]+|mishandles=[0-9]+|valid-preserve-rejected=[0-9]+|valid-bug-still-accepted=[0-9]+|crash=[0-9]+|changed-outside-bugset=[0-9]+' | tr '\n' ' ')
   ccpass=$(echo "$cc"|grep -oE 'pass=(true|false)'|cut -d= -f2); ccchg=$(echo "$cc"|grep -oE 'changed=[0-9]+'|cut -d= -f2)
   ccmis=$(echo "$cc"|grep -oE 'mishandles=[0-9]+'|cut -d= -f2); ccpr=$(echo "$cc"|grep -oE 'valid-preserve-rejected=[0-9]+'|cut -d= -f2)
   ccva=$(echo "$cc"|grep -oE 'valid-bug-still-accepted=[0-9]+'|cut -d= -f2); ccoob=$(echo "$cc"|grep -oE 'changed-outside-bugset=[0-9]+'|cut -d= -f2)
