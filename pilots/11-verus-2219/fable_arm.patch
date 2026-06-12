@@ -1,0 +1,525 @@
+diff --git a/source/rust_verify/src/erase.rs b/source/rust_verify/src/erase.rs
+index 112f24aa3..e972f60b5 100644
+--- a/source/rust_verify/src/erase.rs
++++ b/source/rust_verify/src/erase.rs
+@@ -9,7 +9,7 @@ use vir::modes::ErasureModes;
+ use crate::verus_items::{DummyCaptureItem, VerusItem, VerusItems};
+ use rustc_hir::def_id::LocalDefId;
+ use rustc_mir_build_verus::verus::{
+-    BodyErasure, CallErasure, NodeErase, TreeErase, VarErasure, VerusErasureCtxt,
++    BodyErasure, CallErasure, CallGhostness, NodeErase, TreeErase, VarErasure, VerusErasureCtxt,
+     set_verus_aware_def_ids, set_verus_erasure_ctxt,
+ };
+ use rustc_span::Span;
+@@ -129,7 +129,9 @@ fn resolved_call_to_call_erase(
+ ) -> Result<CallErasure, VirErr> {
+     Ok(match resolved_call {
+         ResolvedCall::SpecPure => CallErasure::EraseTree(TreeErase::IncludeBasicChecks),
+-        ResolvedCall::SpecAllowProofArgs => CallErasure::Call(NodeErase::Erase),
++        ResolvedCall::SpecAllowProofArgs => {
++            CallErasure::Call(NodeErase::Erase, CallGhostness::Ghost)
++        }
+         ResolvedCall::Call(ufun, rfun, in_ghost) => {
+             // Note: in principle, the unresolved function ufun should always be present,
+             // but we currently allow external declarations of resolved trait functions
+@@ -140,46 +142,59 @@ fn resolved_call_to_call_erase(
+             };
+             if *in_ghost && f.x.mode == Mode::Exec {
+                 // This must be an autospec, so change exec -> spec
+-                CallErasure::Call(NodeErase::Erase)
++                CallErasure::Call(NodeErase::Erase, CallGhostness::Ghost)
+             } else if f.x.mode == Mode::Spec {
+-                CallErasure::Call(NodeErase::Erase)
++                CallErasure::Call(NodeErase::Erase, CallGhostness::Ghost)
++            } else if f.x.mode == Mode::Proof {
++                CallErasure::Call(NodeErase::Keep, CallGhostness::Ghost)
+             } else {
+-                CallErasure::Call(NodeErase::Keep)
++                CallErasure::Call(NodeErase::Keep, CallGhostness::Exec)
+             }
+         }
+         ResolvedCall::Ctor(..) | ResolvedCall::BracesCtor(..) => match ctor_mode {
+-            Some(Mode::Spec) => CallErasure::Call(NodeErase::Erase),
+-            Some(_) | None => CallErasure::Call(NodeErase::Keep),
++            Some(Mode::Spec) => CallErasure::Call(NodeErase::Erase, CallGhostness::Ghost),
++            Some(Mode::Proof) => CallErasure::Call(NodeErase::Keep, CallGhostness::Ghost),
++            Some(Mode::Exec) | None => CallErasure::Call(NodeErase::Keep, CallGhostness::Exec),
+         },
+         ResolvedCall::NonStaticExec => CallErasure::keep_all(),
+-        ResolvedCall::NonStaticProof(_modes) => CallErasure::Call(NodeErase::Keep),
++        ResolvedCall::NonStaticProof(_modes) => {
++            CallErasure::Call(NodeErase::Keep, CallGhostness::Ghost)
++        }
+         ResolvedCall::CompilableOperator(co) => match co {
+-            CompilableOperator::IntIntrinsic => CallErasure::Call(NodeErase::Erase),
+-
+-            CompilableOperator::GhostExec => CallErasure::Call(NodeErase::Keep),
++            CompilableOperator::IntIntrinsic => {
++                CallErasure::Call(NodeErase::Erase, CallGhostness::Ghost)
++            }
+ 
++            // These operators are real exec-code operations; they follow Rust's
++            // normal control-flow rules.
+             CompilableOperator::Implies
+             | CompilableOperator::RcNew
+             | CompilableOperator::ArcNew
+             | CompilableOperator::BoxNew
+-            | CompilableOperator::SmartPtrClone { .. }
+-            | CompilableOperator::TrackedNew
+-            | CompilableOperator::TrackedExec => CallErasure::keep_all(),
++            | CompilableOperator::SmartPtrClone { .. } => CallErasure::keep_all(),
+ 
+-            CompilableOperator::ClosureToFnProof(_)
++            // These operators only move ghost values in and out of the Ghost/Tracked
++            // wrappers (they are erased in the compiled program), so they never
++            // diverge, even if the ghost value's type is uninhabited.
++            CompilableOperator::GhostExec
++            | CompilableOperator::TrackedNew
++            | CompilableOperator::TrackedExec
++            | CompilableOperator::ClosureToFnProof(_)
+             | CompilableOperator::TrackedExecBorrow
+             | CompilableOperator::TrackedGet
+             | CompilableOperator::TrackedBorrow
+             | CompilableOperator::TrackedBorrowMut
+             | CompilableOperator::GhostBorrowMut
+-            | CompilableOperator::UseTypeInvariant => CallErasure::keep_all(),
++            | CompilableOperator::UseTypeInvariant => {
++                CallErasure::Call(NodeErase::Keep, CallGhostness::Ghost)
++            }
+         },
+         ResolvedCall::MiscEraseAbsolutely => CallErasure::EraseTree(TreeErase::EraseAbsolutely),
+         ResolvedCall::InferSpecForLoopIter(ast_id) => {
+             if infer_spec_for_loop_iter_erase[ast_id] {
+                 CallErasure::EraseTree(TreeErase::EraseAbsolutely)
+             } else {
+-                CallErasure::Call(NodeErase::Erase)
++                CallErasure::Call(NodeErase::Erase, CallGhostness::Ghost)
+             }
+         }
+     })
+diff --git a/source/rust_verify/src/fn_call_to_vir.rs b/source/rust_verify/src/fn_call_to_vir.rs
+index 6eab2f8d9..f26ed2956 100644
+--- a/source/rust_verify/src/fn_call_to_vir.rs
++++ b/source/rust_verify/src/fn_call_to_vir.rs
+@@ -2163,7 +2163,7 @@ fn extract_ensures<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, ghost: true },
+             );
+ 
+             let typs: Vec<Typ> = closure_param_typs(bctx, expr)?;
+@@ -2205,7 +2205,7 @@ fn extract_quant<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, ghost: true },
+             );
+ 
+             let body = tcx.hir_body(closure.body);
+@@ -2267,7 +2267,7 @@ fn extract_assert_forall_by<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, ghost: true },
+             );
+ 
+             let body = tcx.hir_body(closure.body);
+@@ -2327,7 +2327,7 @@ fn extract_choose<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, ghost: true },
+             );
+ 
+             let closure_body = tcx.hir_body(closure.body);
+diff --git a/source/rust_verify/src/rust_to_vir_expr.rs b/source/rust_verify/src/rust_to_vir_expr.rs
+index 819bbb040..5b12be515 100644
+--- a/source/rust_verify/src/rust_to_vir_expr.rs
++++ b/source/rust_verify/src/rust_to_vir_expr.rs
+@@ -3811,7 +3811,10 @@ pub(crate) fn closure_to_vir<'tcx>(
+         assert!(ensure.1.len() == 0);
+ 
+         let exprx = if is_spec_fn {
+-            bctx.ctxt.push_body_erasure(*def_id, BodyErasure { erase_body: true, ret_spec: true });
++            bctx.ctxt.push_body_erasure(
++                *def_id,
++                BodyErasure { erase_body: true, ret_spec: true, ghost: true },
++            );
+ 
+             if require.len() > 0 || ensure.0.len() > 0 {
+                 return err_span(
+@@ -3829,6 +3832,8 @@ pub(crate) fn closure_to_vir<'tcx>(
+                         None => false,
+                         Some((_, ret_mode)) => ret_mode == Mode::Spec,
+                     },
++                    // proof closures are entirely ghost code; exec closures are not
++                    ghost: proof_fn_modes.is_some(),
+                 },
+             );
+ 
+diff --git a/source/rust_verify/src/rust_to_vir_func.rs b/source/rust_verify/src/rust_to_vir_func.rs
+index e66357425..412e36811 100644
+--- a/source/rust_verify/src/rust_to_vir_func.rs
++++ b/source/rust_verify/src/rust_to_vir_func.rs
+@@ -1988,7 +1988,11 @@ pub(crate) fn check_item_fn<'tcx>(
+ 
+     ctxt.push_body_erasure(
+         id.expect_local(),
+-        BodyErasure { erase_body: mode == Mode::Spec, ret_spec: ret_mode == Mode::Spec },
++        BodyErasure {
++            erase_body: mode == Mode::Spec,
++            ret_spec: ret_mode == Mode::Spec,
++            ghost: mode != Mode::Exec,
++        },
+     );
+ 
+     let mut func = FunctionX {
+@@ -2725,7 +2729,11 @@ pub(crate) fn check_item_const_or_static<'tcx>(
+ 
+     ctxt.push_body_erasure(
+         id.expect_local(),
+-        BodyErasure { erase_body: body_mode == Mode::Spec, ret_spec: ret_mode == Mode::Spec },
++        BodyErasure {
++            erase_body: body_mode == Mode::Spec,
++            ret_spec: ret_mode == Mode::Spec,
++            ghost: body_mode != Mode::Exec,
++        },
+     );
+ 
+     let mut functionx = FunctionX {
+diff --git a/source/rustc_mir_build/src/builder/expr/into.rs b/source/rustc_mir_build/src/builder/expr/into.rs
+index f595cfc77..d03753d4a 100644
+--- a/source/rustc_mir_build/src/builder/expr/into.rs
++++ b/source/rustc_mir_build/src/builder/expr/into.rs
+@@ -145,9 +145,29 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                         this.as_temp(block, this.local_temp_lifetime(), source, Mutability::Mut)
+                 );
+ 
+-                // This is an optimization. If the expression was a call then we already have an
+-                // unreachable block. Don't bother to terminate it and create a new one.
+-                if is_call {
++                if crate::verus::erasure_active_for_body(this.tcx, this.def_id) {
++                    // Verus: in the program built for ghost lifetime checking, a
++                    // value of type `!` can legitimately exist in ghost code (ghost
++                    // code is total), so this coercion must not cut the control-flow
++                    // graph; the code after it must still be borrow-checked.
++                    // Assign the destination an erased ghost value and continue.
++                    //
++                    // This does not weaken the checking of exec code: an exec value
++                    // of type `!` can only be produced by an expression that really
++                    // diverges, and that divergence is enforced at the diverging
++                    // call itself (its return edge is removed), which already makes
++                    // this code unreachable.
++                    let success = this.verus_assign_erased_ghost_value(
++                        block,
++                        destination,
++                        expr.ty,
++                        source_info,
++                        expr_span,
++                    );
++                    success.unit()
++                } else if is_call {
++                    // This is an optimization. If the expression was a call then we already have an
++                    // unreachable block. Don't bother to terminate it and create a new one.
+                     block.unit()
+                 } else {
+                     this.cfg.terminate(block, source_info, TerminatorKind::Unreachable);
+@@ -366,6 +386,17 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 })
+             }
+             ExprKind::Call { ty: _, fun, ref args, from_hir_call, fn_span } => {
++                // Verus: ghost (spec/proof) calls are total and must keep their
++                // return edge even if the return type is uninhabited, so that the
++                // code following them is still borrow-checked.
++                let verus_never_diverges = crate::verus::call_never_diverges(
++                    this.tcx,
++                    this.thir,
++                    this.def_id,
++                    this.hir_id.owner,
++                    fun,
++                    expr.temp_scope_id,
++                );
+                 let fun = unpack!(block = this.as_local_operand(block, fun));
+                 let args: Box<[_]> = args
+                     .into_iter()
+@@ -382,6 +413,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+ 
+                 debug!("expr_into_dest: fn_span={:?}", fn_span);
+ 
++                if verus_never_diverges {
++                    this.verus_total_call_blocks.insert(block);
++                }
+                 this.cfg.terminate(
+                     block,
+                     source_info,
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86ad..7bb47480b 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -25,7 +25,7 @@ use rustc_abi::{ExternAbi, FieldIdx};
+ use rustc_apfloat::Float;
+ use rustc_apfloat::ieee::{Double, Half, Quad, Single};
+ use rustc_ast::attr;
+-use rustc_data_structures::fx::FxHashMap;
++use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+ use rustc_data_structures::sorted_map::SortedIndexMultiMap;
+ use rustc_errors::ErrorGuaranteed;
+ use rustc_hir::attrs::AttributeKind;
+@@ -233,6 +233,13 @@ struct Builder<'a, 'tcx> {
+     /// Collects additional coverage information during MIR building.
+     /// Only present if coverage is enabled and this function is eligible.
+     coverage_info: Option<coverageinfo::CoverageInfoBuilder>,
++
++    /// Verus: blocks terminated by a call that represents ghost (spec/proof) code.
++    /// Ghost code is total in Verus semantics, so `lint_and_remove_uninhabited` must
++    /// not remove the return edges of these calls even if the return type is
++    /// uninhabited; otherwise the code following them would be hidden from the
++    /// borrow checker (https://github.com/verus-lang/verus/issues/2219).
++    verus_total_call_blocks: FxHashSet<BasicBlock>,
+ }
+ 
+ type CaptureMap<'tcx> = SortedIndexMultiMap<usize, ItemLocalId, Capture<'tcx>>;
+@@ -811,6 +818,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+             var_debug_info: vec![],
+             lint_level_roots_cache: GrowableBitSet::new_empty(),
+             coverage_info: coverageinfo::CoverageInfoBuilder::new_if_enabled(tcx, def),
++            verus_total_call_blocks: FxHashSet::default(),
+         };
+ 
+         assert_eq!(builder.cfg.start_new_block(), START_BLOCK);
+@@ -840,10 +848,67 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+         writer.write_mir_fn(&body, &mut std::io::stdout()).unwrap();
+     }
+ 
++    /// Verus: assign `destination` the result of a call to
++    /// `erased_ghost_value::<(), T>(())`, where `T` is `ty`, and continue in a fresh
++    /// block. This is used where rustc would normally emit an `Unreachable`
++    /// terminator because a value of an uninhabited type was produced: in the
++    /// program built for Verus lifetime checking, ghost code is total, so a ghost
++    /// value of an uninhabited type does not make the following code unreachable.
++    fn verus_assign_erased_ghost_value(
++        &mut self,
++        block: BasicBlock,
++        destination: Place<'tcx>,
++        ty: Ty<'tcx>,
++        source_info: SourceInfo,
++        span: Span,
++    ) -> BasicBlock {
++        let erasure_ctxt = crate::verus::get_verus_erasure_ctxt_option()
++            .expect("verus_assign_erased_ghost_value requires the VerusErasureCtxt");
++        let tcx = self.tcx;
++        let unit_ty = Ty::new_tup(tcx, &[]);
++        let args = tcx.mk_args(&[unit_ty.into(), ty.into()]);
++        let func = Operand::function_handle(
++            tcx,
++            erasure_ctxt.erased_ghost_value_fn_def_id,
++            args,
++            span,
++        );
++        let arg = Operand::Constant(Box::new(ConstOperand {
++            span,
++            user_ty: None,
++            const_: Const::zero_sized(unit_ty),
++        }));
++        let success = self.cfg.start_new_block();
++        // The destination type may itself be uninhabited; make sure
++        // lint_and_remove_uninhabited keeps this call's return edge.
++        self.verus_total_call_blocks.insert(block);
++        self.cfg.terminate(
++            block,
++            source_info,
++            TerminatorKind::Call {
++                func,
++                args: [rustc_span::source_map::Spanned { node: arg, span }].into(),
++                unwind: UnwindAction::Continue,
++                destination,
++                target: Some(success),
++                call_source: CallSource::Misc,
++                fn_span: span,
++            },
++        );
++        self.diverge_from(block);
++        success
++    }
++
+     fn lint_and_remove_uninhabited(&mut self) {
+         let mut lints = vec![];
+ 
+-        for bbdata in self.cfg.basic_blocks.iter_mut() {
++        for (bb, bbdata) in self.cfg.basic_blocks.iter_enumerated_mut() {
++            // Verus: calls that represent ghost code never diverge, even if their
++            // return type is uninhabited; ghost code is total, and removing the
++            // return edge would hide the following code from the borrow checker.
++            if self.verus_total_call_blocks.contains(&bb) {
++                continue;
++            }
+             let term = bbdata.terminator_mut();
+             let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
+                 continue;
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c48453..f130a7bcf 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -60,7 +60,24 @@ pub enum CallErasure {
+     /// Erase the call and ALL subexpressions. This can only be used when the node is guaranteed
+     /// to have no proof code in the subtree (outer_mode = spec in modes.rs)
+     EraseTree(TreeErase),
+-    Call(NodeErase),
++    Call(NodeErase, CallGhostness),
++}
++
++/// Whether a call is ghost (spec/proof) code for control-flow purposes.
++/// In Verus semantics, ghost code is total: a ghost call never diverges, even if its
++/// return type is uninhabited (e.g., `!`). If we let rustc treat such a call as
++/// diverging when building the MIR used for lifetime checking, all the code after
++/// the call would become unreachable and thus invisible to the borrow checker,
++/// which is unsound for tracked values
++/// (see https://github.com/verus-lang/verus/issues/2219).
++#[derive(Debug, PartialEq, Eq, Clone, Copy)]
++pub enum CallGhostness {
++    /// Exec-mode call: follow Rust's normal control-flow rules
++    /// (a call with an uninhabited return type really diverges).
++    Exec,
++    /// Ghost (spec/proof) call: must not be treated as diverging in the
++    /// lifetime-check program.
++    Ghost,
+ }
+ 
+ /// Information for a body (function or closure).
+@@ -68,6 +85,11 @@ pub enum CallErasure {
+ pub struct BodyErasure {
+     pub erase_body: bool,
+     pub ret_spec: bool,
++    /// True if the body consists entirely of ghost (spec/proof) code, e.g., the body
++    /// of a spec/proof function or a spec/proof closure. Ghost code is total, so no
++    /// expression in such a body may introduce divergence into the MIR built for
++    /// lifetime checking.
++    pub ghost: bool,
+ }
+ 
+ /// Global context with all information across the krate.
+@@ -129,7 +151,7 @@ fn get_verus_erasure_ctxt() -> Arc<VerusErasureCtxt> {
+         .clone()
+ }
+ 
+-fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
++pub(crate) fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 
+@@ -224,14 +246,108 @@ impl NodeErase {
+ 
+ impl CallErasure {
+     pub fn keep_all() -> Self {
+-        CallErasure::Call(NodeErase::Keep)
++        CallErasure::Call(NodeErase::Keep, CallGhostness::Exec)
+     }
+ 
+     pub(crate) fn should_erase(&self) -> bool {
+         match self {
+             CallErasure::EraseTree(_) => panic!("EraseTree should be handled by mirror_expr_opt"),
+-            CallErasure::Call(node_erase) => node_erase.should_erase(),
++            CallErasure::Call(node_erase, _) => node_erase.should_erase(),
++        }
++    }
++}
++
++/// Is Verus erasure being applied to the given body? (i.e., are we building the
++/// program used for ghost lifetime checking, and is this body one that Verus checks?)
++pub(crate) fn erasure_active_for_body<'tcx>(
++    tcx: TyCtxt<'tcx>,
++    body_def_id: LocalDefId,
++) -> bool {
++    if get_verus_erasure_ctxt_option().is_none() {
++        return false;
++    }
++    let fn_local_def_id = enclosing_fn_local_def_id(tcx, body_def_id);
++    match VERUS_AWARE_DEF_IDS.read().unwrap().clone() {
++        Some(ids) => ids.contains(&fn_local_def_id),
++        None => false,
++    }
++}
++
++/// Decides whether the MIR builder must treat the given THIR call as total
++/// (non-diverging) even if its return type is uninhabited.
++///
++/// In Verus semantics ghost (spec/proof) code is total: every type is inhabited at
++/// the SMT level, so the code following a ghost expression of an uninhabited type
++/// (e.g. `!`) is still verified and must therefore still be borrow-checked. Cutting
++/// the control-flow edge after such a call would hide subsequent code from the
++/// borrow checker, breaking linearity checking of tracked values
++/// (https://github.com/verus-lang/verus/issues/2219).
++///
++/// Returns true when the call is:
++///  - a call to `erased_ghost_value` (the stand-in for erased ghost code), or
++///  - a fake call whose callee is itself an erased ghost value (closure-capture
++///    coercions and FnProof calls are encoded this way), or
++///  - any call inside a body that is entirely ghost (spec/proof fn or closure), or
++///  - a call that mode checking resolved as a spec/proof-mode call.
++///
++/// Exec calls keep Rust's normal control-flow rules: an exec call with an
++/// uninhabited return type really does diverge.
++pub(crate) fn call_never_diverges<'tcx>(
++    tcx: TyCtxt<'tcx>,
++    thir: &rustc_middle::thir::Thir<'tcx>,
++    body_def_id: LocalDefId,
++    body_owner: rustc_hir::OwnerId,
++    fun: ExprId,
++    call_temp_scope_id: hir::ItemLocalId,
++) -> bool {
++    let Some(erasure_ctxt) = get_verus_erasure_ctxt_option() else {
++        return false;
++    };
++    if !erasure_active_for_body(tcx, body_def_id) {
++        return false;
++    }
++
++    // Calls to erased_ghost_value stand in for erased ghost code.
++    if let TyKind::FnDef(fn_def_id, _) = thir.exprs[fun].ty.kind() {
++        if *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id {
++            return true;
++        }
++    }
++
++    // Fake calls synthesized by erasure (e.g., closure-capture coercions) use an
++    // erased ghost value as the callee.
++    if is_erased_in_thir(thir, &erasure_ctxt, &thir.exprs[fun].kind) {
++        return true;
++    }
++
++    // Bodies that consist entirely of ghost code.
++    if matches!(erasure_ctxt.bodies.get(&body_def_id), Some(BodyErasure { ghost: true, .. })) {
++        return true;
++    }
++
++    // Calls that mode checking resolved as ghost (spec/proof-mode) calls.
++    let call_hir_id = HirId { owner: body_owner, local_id: call_temp_scope_id };
++    matches!(
++        erasure_ctxt.calls.get(&call_hir_id),
++        Some(CallErasure::Call(_, CallGhostness::Ghost))
++    )
++}
++
++/// Like `is_erased`, but usable after THIR building (from the MIR builder).
++fn is_erased_in_thir<'tcx>(
++    thir: &rustc_middle::thir::Thir<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    expr_kind: &rustc_middle::thir::ExprKind<'tcx>,
++) -> bool {
++    match expr_kind {
++        ExprKind::Call { fun, args: _, .. } => match thir.exprs[*fun].ty.kind() {
++            TyKind::FnDef(fn_def_id, _) => *fn_def_id == erasure_ctxt.erased_ghost_value_fn_def_id,
++            _ => false,
++        },
++        ExprKind::Scope { region_scope: _, lint_level: _, value } => {
++            is_erased_in_thir(thir, erasure_ctxt, &thir.exprs[*value].kind)
+         }
++        _ => false,
+     }
+ }
+ 
