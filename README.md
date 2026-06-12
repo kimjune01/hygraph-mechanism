@@ -10,6 +10,10 @@ generates the structure. It is not a resolve-rate claim.
 
 ---
 
+**Start here:** [`LESSONS.md`](LESSONS.md) — distilled findings + methodological lessons (the worklog, condensed). [`REPRODUCE.md`](REPRODUCE.md) — how to re-derive them. The headline case is [`pilots/11-verus-2219/`](pilots/11-verus-2219/) (a soundness bug whose fix is an XOR-shaped predicate). Raw chronology in [`worklog/`](worklog/).
+
+---
+
 ## Why this exists: the wrong bench
 
 The prior work ([`swebench-pro`](https://github.com/kimjune01/swebench-pro), the
