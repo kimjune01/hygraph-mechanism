@@ -1,0 +1,995 @@
+diff --git a/source/rustc_mir_build/src/builder/expr/into.rs b/source/rustc_mir_build/src/builder/expr/into.rs
+index f595cfc..620b835 100644
+--- a/source/rustc_mir_build/src/builder/expr/into.rs
++++ b/source/rustc_mir_build/src/builder/expr/into.rs
+@@ -19,6 +19,22 @@ use crate::builder::matches::{DeclareLetBindings, HasMatchGuard};
+ use crate::builder::{BlockAnd, BlockAndExtension, BlockFrame, Builder, NeedsTemporary};
+ use crate::errors::{LoopMatchArmWithGuard, LoopMatchUnsupportedType};
+ 
++fn verus_erased_ghost_value_tuple_arg<'tcx>(
++    this: &Builder<'_, 'tcx>,
++    expr_id: ExprId,
++) -> Option<ExprId> {
++    let erased_ghost_value_fn_def_id = crate::verus::erased_ghost_value_fn_def_id()?;
++    let expr = &this.thir[expr_id];
++    match &expr.kind {
++        ExprKind::Scope { value, .. } => verus_erased_ghost_value_tuple_arg(this, *value),
++        ExprKind::Call { fun, args, .. } => match this.thir[*fun].ty.kind() {
++            ty::FnDef(fn_def_id, _) if *fn_def_id == erased_ghost_value_fn_def_id => Some(args[0]),
++            _ => None,
++        },
++        _ => None,
++    }
++}
++
+ impl<'a, 'tcx> Builder<'a, 'tcx> {
+     /// Compile `expr`, storing the result into `destination`, which
+     /// is assumed to be uninitialized.
+@@ -134,16 +150,25 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 span_bug!(expr_span, "unexpected let expression outside of if or match-guard");
+             }
+             ExprKind::NeverToAny { source } => {
+-                let source_expr = &this.thir[source];
+-                let is_call =
+-                    matches!(source_expr.kind, ExprKind::Call { .. } | ExprKind::InlineAsm { .. });
++                let erased_ghost_value_arg = verus_erased_ghost_value_tuple_arg(this, source);
++                let is_call = erased_ghost_value_arg.is_none()
++                    && matches!(
++                        this.thir[source].kind,
++                        ExprKind::Call { .. } | ExprKind::InlineAsm { .. }
++                    );
+ 
+                 // (#66975) Source could be a const of type `!`, so has to
+                 // exist in the generated MIR.
+-                unpack!(
+-                    block =
+-                        this.as_temp(block, this.local_temp_lifetime(), source, Mutability::Mut)
+-                );
++                if let Some(arg) = erased_ghost_value_arg {
++                    unpack!(
++                        block = this.as_temp(block, this.local_temp_lifetime(), arg, Mutability::Mut)
++                    );
++                } else {
++                    unpack!(
++                        block =
++                            this.as_temp(block, this.local_temp_lifetime(), source, Mutability::Mut)
++                    );
++                }
+ 
+                 // This is an optimization. If the expression was a call then we already have an
+                 // unreachable block. Don't bother to terminate it and create a new one.
+@@ -366,41 +391,50 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 })
+             }
+             ExprKind::Call { ty: _, fun, ref args, from_hir_call, fn_span } => {
+-                let fun = unpack!(block = this.as_local_operand(block, fun));
+-                let args: Box<[_]> = args
+-                    .into_iter()
+-                    .copied()
+-                    .map(|arg| Spanned {
+-                        node: unpack!(block = this.as_local_call_operand(block, arg)),
+-                        span: this.thir.exprs[arg].span,
+-                    })
+-                    .collect();
++                if expr.ty.is_never()
++                    && let Some(arg) = verus_erased_ghost_value_tuple_arg(this, expr_id)
++                {
++                    unpack!(
++                        block = this.as_temp(block, this.local_temp_lifetime(), arg, Mutability::Mut)
++                    );
++                    block.unit()
++                } else {
++                    let fun = unpack!(block = this.as_local_operand(block, fun));
++                    let args: Box<[_]> = args
++                        .into_iter()
++                        .copied()
++                        .map(|arg| Spanned {
++                            node: unpack!(block = this.as_local_call_operand(block, arg)),
++                            span: this.thir.exprs[arg].span,
++                        })
++                        .collect();
+ 
+-                let success = this.cfg.start_new_block();
++                    let success = this.cfg.start_new_block();
+ 
+-                this.record_operands_moved(&args);
++                    this.record_operands_moved(&args);
+ 
+-                debug!("expr_into_dest: fn_span={:?}", fn_span);
++                    debug!("expr_into_dest: fn_span={:?}", fn_span);
+ 
+-                this.cfg.terminate(
+-                    block,
+-                    source_info,
+-                    TerminatorKind::Call {
+-                        func: fun,
+-                        args,
+-                        unwind: UnwindAction::Continue,
+-                        destination,
+-                        target: Some(success),
+-                        call_source: if from_hir_call {
+-                            CallSource::Normal
+-                        } else {
+-                            CallSource::OverloadedOperator
++                    this.cfg.terminate(
++                        block,
++                        source_info,
++                        TerminatorKind::Call {
++                            func: fun,
++                            args,
++                            unwind: UnwindAction::Continue,
++                            destination,
++                            target: Some(success),
++                            call_source: if from_hir_call {
++                                CallSource::Normal
++                            } else {
++                                CallSource::OverloadedOperator
++                            },
++                            fn_span,
+                         },
+-                        fn_span,
+-                    },
+-                );
+-                this.diverge_from(block);
+-                success.unit()
++                    );
++                    this.diverge_from(block);
++                    success.unit()
++                }
+             }
+             ExprKind::ByUse { expr, span } => {
+                 let place = unpack!(block = this.as_place(block, expr));
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c484..32f0d4e 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -133,6 +133,10 @@ fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 
++pub(crate) fn erased_ghost_value_fn_def_id() -> Option<DefId> {
++    get_verus_erasure_ctxt_option().map(|ctxt| ctxt.erased_ghost_value_fn_def_id)
++}
++
+ /// Our erasure scheme will fail if this query runs too early, before we initialize the
+ /// VerusErasureCtxt. However, there are some items where this happens
+ /// intentionally (e.g., for consts, which may be evaluated during type-checking).
+diff --git a/source/vir/src/modes.rs b/source/vir/src/modes.rs
+index ead7d92..750d0d9 100644
+--- a/source/vir/src/modes.rs
++++ b/source/vir/src/modes.rs
+@@ -3662,6 +3662,17 @@ fn check_function(
+ 
+         if function.x.mode != Mode::Spec || function.x.ret.x.mode != Mode::Spec {
+             let functionx = &mut Arc::make_mut(&mut *function).x;
++            if let Some(body) = &functionx.body {
++                crate::resolution_inference::check_uses_initialized_for_body(
++                    &functionx.params,
++                    body,
++                    &record.read_kind_finals,
++                    &ctxt.datatypes,
++                    &ctxt.funs,
++                    &record.var_modes,
++                    &record.temporary_modes,
++                )?;
++            }
+             if !new_mut_ref {
+                 crate::user_defined_type_invariants::annotate_user_defined_invariants(
+                     functionx,
+diff --git a/source/vir/src/resolution_inference.rs b/source/vir/src/resolution_inference.rs
+index 503e75d..d2da495 100644
+--- a/source/vir/src/resolution_inference.rs
++++ b/source/vir/src/resolution_inference.rs
+@@ -235,10 +235,11 @@ The analysis is pretty weak right now but could be improved.
+ */
+ 
+ use crate::ast::{
+-    Arm, BinaryOp, ByRef, CtorUpdateTail, Datatype, Dt, Expr, ExprX, FieldOpr, Fun, Function,
+-    Ident, Mode, ModeWrapperMode, Params, Path, Pattern, PatternBinding, PatternX, Place, PlaceX,
+-    ReadKind, SpannedTyped, Stmt, StmtX, Typ, TypDecoration, TypX, UnaryOpr, UnfinalizedReadKind,
+-    VarBinders, VarIdent, VarIdentDisambiguate, VariantCheck, VirErr,
++    Arm, BinaryOp, ByRef, CallTarget, CallTargetKind, CtorUpdateTail, Datatype, Dt, Expr, Exprs,
++    ExprX, FieldOpr, Fun, Function, Ident, Mode, ModeWrapperMode, Params, Path, Pattern,
++    PatternBinding, PatternX, Place, PlaceX, ReadKind, SpannedTyped, Stmt, StmtX, Typ,
++    TypDecoration, TypX, UnaryOpr, UnfinalizedReadKind, VarBinders, VarIdent,
++    VarIdentDisambiguate, VariantCheck, VirErr,
+ };
+ use crate::ast_util::{bool_typ, mk_bool, typ_to_diagnostic_str, undecorate_typ, unit_typ};
+ use crate::ast_visitor::VisitorScopeMap;
+@@ -285,6 +286,599 @@ pub(crate) fn infer_resolution(
+     )
+ }
+ 
++pub(crate) fn check_uses_initialized_for_body(
++    params: &Params,
++    body: &Expr,
++    read_kind_finals: &ReadKindFinals,
++    datatypes: &HashMap<Path, Datatype>,
++    functions: &HashMap<Fun, Function>,
++    var_modes: &HashMap<VarIdent, Mode>,
++    temporary_modes: &HashMap<AstId, Mode>,
++) -> Result<(), VirErr> {
++    let mut scan_var_modes = var_modes.clone();
++    for p in params.iter() {
++        scan_var_modes.insert(p.x.name.clone(), p.x.mode);
++    }
++    if !expr_contains_ghost_uninhabited_source(body, datatypes, functions, &scan_var_modes) {
++        return Ok(());
++    }
++    check_duplicate_preliminary_moves(body)?;
++    let (cfg, _assigns_to_resolve, _typ_inv_obligations) = new_cfg_with_options(
++        params,
++        body,
++        read_kind_finals,
++        datatypes,
++        functions,
++        var_modes,
++        temporary_modes,
++        true,
++    )?;
++    check_uses_initialized(&cfg, &body.span)
++}
++
++pub(crate) fn typ_is_rust_uninhabited(
++    typ: &Typ,
++    datatypes: &HashMap<Path, Datatype>,
++) -> bool {
++    fn typ_is_uninhabited(typ: &Typ, datatypes: &HashMap<Path, Datatype>, seen: &mut HashSet<Dt>) -> bool {
++        match &**typ {
++            TypX::Decorate(TypDecoration::Never, _, _) => true,
++            TypX::Decorate(_, _, typ) => typ_is_uninhabited(typ, datatypes, seen),
++            TypX::Datatype(Dt::Tuple(_), typs, _) => {
++                typs.iter().any(|typ| typ_is_uninhabited(typ, datatypes, seen))
++            }
++            TypX::Datatype(dt, typs, _) => {
++                if !seen.insert(dt.clone()) {
++                    return false;
++                }
++                let res = match dt {
++                    Dt::Path(path) => {
++                        let Some(datatype) = datatypes.get(path) else {
++                            seen.remove(dt);
++                            return false;
++                        };
++                        path.segments.iter().any(|s| s.ends_with("Infallible"))
++                            || datatype.x.variants.len() == 0
++                            || datatype.x.variants.iter().all(|variant| {
++                                variant.fields.iter().any(|field| {
++                                    let typ = subst_typ_for_datatype(
++                                        &datatype.x.typ_params,
++                                        typs,
++                                        &field.a.0,
++                                    );
++                                    typ_is_uninhabited(&typ, datatypes, seen)
++                                })
++                            })
++                    }
++                    Dt::Tuple(_) => unreachable!(),
++                };
++                seen.remove(dt);
++                res
++            }
++            _ => false,
++        }
++    }
++
++    typ_is_uninhabited(typ, datatypes, &mut HashSet::new())
++}
++
++fn expr_contains_uninhabited_typ(expr: &Expr, datatypes: &HashMap<Path, Datatype>) -> bool {
++    let mut found = false;
++    crate::ast_visitor::expr_visitor_walk(expr, &mut |expr| {
++        if matches!(expr.x, ExprX::NeverToAny(_)) {
++            return crate::ast_visitor::VisitorControlFlow::Return;
++        }
++        if typ_is_rust_uninhabited(&expr.typ, datatypes) {
++            found = true;
++            return crate::ast_visitor::VisitorControlFlow::Stop(());
++        }
++        crate::ast_visitor::VisitorControlFlow::Recurse
++    });
++    found
++}
++
++fn expr_contains_never_to_any_or_uninhabited_typ(
++    expr: &Expr,
++    datatypes: &HashMap<Path, Datatype>,
++) -> bool {
++    let mut found = false;
++    crate::ast_visitor::expr_visitor_walk(expr, &mut |expr| {
++        if matches!(expr.x, ExprX::NeverToAny(_))
++            || typ_is_rust_uninhabited(&expr.typ, datatypes)
++        {
++            found = true;
++            return crate::ast_visitor::VisitorControlFlow::Stop(());
++        }
++        crate::ast_visitor::VisitorControlFlow::Recurse
++    });
++    found
++}
++
++fn call_target_is_ghost(call_target: &CallTarget, functions: &HashMap<Fun, Function>) -> bool {
++    match call_target {
++        CallTarget::Fun(kind, fun, _, _, _, _) => match kind {
++            CallTargetKind::ProofFn(_, ret_mode) => *ret_mode != Mode::Exec,
++            _ => functions
++                .get(fun)
++                .map(|f| f.x.mode != Mode::Exec)
++                .unwrap_or(false),
++        },
++        CallTarget::FnSpec(_) | CallTarget::BuiltinSpecFun(..) => true,
++    }
++}
++
++fn place_root_is_ghost(place: &Place, var_modes: &HashMap<VarIdent, Mode>) -> bool {
++    match &place.x {
++        PlaceX::Local(var_ident) => {
++            var_modes.get(var_ident).map(|m| *m != Mode::Exec).unwrap_or(false)
++        }
++        PlaceX::Field(_, place)
++        | PlaceX::DerefMut(place)
++        | PlaceX::ModeUnwrap(place, _)
++        | PlaceX::UserDefinedTypInvariantObligation(place, _) => {
++            place_root_is_ghost(place, var_modes)
++        }
++        PlaceX::WithExpr(_, place) => place_root_is_ghost(place, var_modes),
++        PlaceX::Temporary(_) | PlaceX::Index(..) => false,
++    }
++}
++
++fn expr_contains_ghost_uninhabited_source(
++    expr: &Expr,
++    datatypes: &HashMap<Path, Datatype>,
++    functions: &HashMap<Fun, Function>,
++    var_modes: &HashMap<VarIdent, Mode>,
++) -> bool {
++    let mut found = false;
++    crate::ast_visitor::expr_visitor_walk(expr, &mut |expr| {
++        if typ_is_rust_uninhabited(&expr.typ, datatypes) {
++            let is_ghost_source = match &expr.x {
++                ExprX::Call(call_target, _, _) => call_target_is_ghost(call_target, functions),
++                ExprX::ReadPlace(place, _) => place_root_is_ghost(place, var_modes),
++                ExprX::Var(var_ident)
++                | ExprX::VarLoc(var_ident)
++                | ExprX::VarAt(var_ident, _) => {
++                    var_modes.get(var_ident).map(|m| *m != Mode::Exec).unwrap_or(false)
++                }
++                ExprX::ConstVar(..) | ExprX::StaticVar(_) => true,
++                _ => false,
++            };
++            if is_ghost_source {
++                found = true;
++                return crate::ast_visitor::VisitorControlFlow::Stop(());
++            }
++        }
++        crate::ast_visitor::VisitorControlFlow::Recurse
++    });
++    found
++}
++
++fn check_duplicate_preliminary_moves(expr: &Expr) -> Result<(), VirErr> {
++    fn place_root(place: &Place) -> Option<VarIdent> {
++        match &place.x {
++            PlaceX::Local(var_ident) => Some(var_ident.clone()),
++            PlaceX::Field(_, place)
++            | PlaceX::DerefMut(place)
++            | PlaceX::ModeUnwrap(place, ModeWrapperMode::Proof)
++            | PlaceX::UserDefinedTypInvariantObligation(place, _) => place_root(place),
++            PlaceX::ModeUnwrap(_, ModeWrapperMode::Spec) | PlaceX::Temporary(_) => None,
++            PlaceX::WithExpr(_, place) => place_root(place),
++            PlaceX::Index(place, _, _, _) => place_root(place),
++        }
++    }
++
++    let mut seen: HashSet<VarIdent> = HashSet::new();
++    let mut result = Ok(());
++    crate::ast_visitor::expr_visitor_walk(expr, &mut |expr| {
++        if result.is_err() {
++            return crate::ast_visitor::VisitorControlFlow::Stop(());
++        }
++        if let ExprX::ReadPlace(place, read_kind) = &expr.x {
++            if matches!(read_kind.preliminary_kind, ReadKind::Move) {
++                if let Some(var_ident) = place_root(place) {
++                    let name = LocalName::Named(var_ident.clone());
++                    if !is_generated_tmp_local(&name) && !seen.insert(var_ident.clone()) {
++                        result = Err(error(
++                            &expr.span,
++                            format!(
++                                "use of possibly moved value `{}`",
++                                crate::def::user_local_name(&var_ident)
++                            ),
++                        ));
++                        return crate::ast_visitor::VisitorControlFlow::Stop(());
++                    }
++                }
++            }
++        }
++        crate::ast_visitor::VisitorControlFlow::Recurse
++    });
++    result
++}
++
++#[derive(Clone, PartialEq, Eq)]
++enum MoveProjectionKey {
++    Field(Dt, Ident, Ident),
++    DerefMut,
++    Index,
++}
++
++#[derive(Clone)]
++struct MovePlaceKey {
++    root: VarIdent,
++    projections: Vec<MoveProjectionKey>,
++}
++
++#[derive(Clone)]
++struct NeverTailState {
++    seen_ghost_never: bool,
++    moved: Vec<MovePlaceKey>,
++}
++
++fn check_never_tail_uses(
++    expr: &Expr,
++    datatypes: &HashMap<Path, Datatype>,
++    functions: &HashMap<Fun, Function>,
++    var_modes: &HashMap<VarIdent, Mode>,
++) -> Result<(), VirErr> {
++    fn call_target_is_ghost(
++        call_target: &CallTarget,
++        functions: &HashMap<Fun, Function>,
++    ) -> bool {
++        match call_target {
++            CallTarget::Fun(kind, fun, _, _, _, _) => match kind {
++                CallTargetKind::ProofFn(_, ret_mode) => *ret_mode != Mode::Exec,
++                _ => functions.get(fun).map(|f| f.x.mode != Mode::Exec).unwrap_or(false),
++            },
++            CallTarget::FnSpec(_) | CallTarget::BuiltinSpecFun(..) => true,
++        }
++    }
++
++    fn place_root_is_ghost(place: &Place, var_modes: &HashMap<VarIdent, Mode>) -> bool {
++        match &place.x {
++            PlaceX::Local(var_ident) => {
++                var_modes.get(var_ident).map(|m| *m != Mode::Exec).unwrap_or(false)
++            }
++            PlaceX::Field(_, place)
++            | PlaceX::DerefMut(place)
++            | PlaceX::ModeUnwrap(place, _)
++            | PlaceX::UserDefinedTypInvariantObligation(place, _) => {
++                place_root_is_ghost(place, var_modes)
++            }
++            PlaceX::WithExpr(_, place) => place_root_is_ghost(place, var_modes),
++            PlaceX::Temporary(_) | PlaceX::Index(..) => false,
++        }
++    }
++
++    fn expr_is_ghost_never_source(
++        expr: &Expr,
++        datatypes: &HashMap<Path, Datatype>,
++        functions: &HashMap<Fun, Function>,
++        var_modes: &HashMap<VarIdent, Mode>,
++    ) -> bool {
++        if !typ_is_rust_uninhabited(&expr.typ, datatypes) {
++            return false;
++        }
++        match &expr.x {
++            ExprX::Call(call_target, _, _) => call_target_is_ghost(call_target, functions),
++            ExprX::ReadPlace(place, _) => place_root_is_ghost(place, var_modes),
++            ExprX::Var(var_ident) | ExprX::VarLoc(var_ident) | ExprX::VarAt(var_ident, _) => {
++                var_modes.get(var_ident).map(|m| *m != Mode::Exec).unwrap_or(false)
++            }
++            ExprX::ConstVar(..) | ExprX::StaticVar(_) => true,
++            _ => false,
++        }
++    }
++
++    fn place_key(place: &Place) -> Option<MovePlaceKey> {
++        fn push(place: &Place, projections: &mut Vec<MoveProjectionKey>) -> Option<VarIdent> {
++            match &place.x {
++                PlaceX::Local(var_ident) => Some(var_ident.clone()),
++                PlaceX::Field(field, place) => {
++                    let root = push(place, projections)?;
++                    projections.push(MoveProjectionKey::Field(
++                        field.datatype.clone(),
++                        field.variant.clone(),
++                        field.field.clone(),
++                    ));
++                    Some(root)
++                }
++                PlaceX::DerefMut(place) => {
++                    let root = push(place, projections)?;
++                    projections.push(MoveProjectionKey::DerefMut);
++                    Some(root)
++                }
++                PlaceX::ModeUnwrap(place, ModeWrapperMode::Proof)
++                | PlaceX::UserDefinedTypInvariantObligation(place, _) => push(place, projections),
++                PlaceX::ModeUnwrap(_, ModeWrapperMode::Spec) | PlaceX::Temporary(_) => None,
++                PlaceX::WithExpr(_, place) => push(place, projections),
++                PlaceX::Index(place, _, _, _) => {
++                    let root = push(place, projections)?;
++                    projections.push(MoveProjectionKey::Index);
++                    Some(root)
++                }
++            }
++        }
++
++        let mut projections = Vec::new();
++        let root = push(place, &mut projections)?;
++        let name = LocalName::Named(root.clone());
++        if is_generated_tmp_local(&name) {
++            None
++        } else {
++            Some(MovePlaceKey { root, projections })
++        }
++    }
++
++    fn places_overlap(a: &MovePlaceKey, b: &MovePlaceKey) -> bool {
++        if a.root != b.root {
++            return false;
++        }
++        let n = std::cmp::min(a.projections.len(), b.projections.len());
++        for i in 0..n {
++            match (&a.projections[i], &b.projections[i]) {
++                (
++                    MoveProjectionKey::Field(dt1, variant1, field1),
++                    MoveProjectionKey::Field(dt2, variant2, field2),
++                ) if dt1 != dt2 || variant1 != variant2 || field1 != field2 => {
++                    return false;
++                }
++                (MoveProjectionKey::Field(..), MoveProjectionKey::Field(..)) => {}
++                (MoveProjectionKey::DerefMut, MoveProjectionKey::DerefMut)
++                | (MoveProjectionKey::Index, MoveProjectionKey::Index) => {}
++                _ => return true,
++            }
++        }
++        true
++    }
++
++    fn record_move(state: &mut NeverTailState, place: &Place, span: &Span) -> Result<(), VirErr> {
++        let Some(key) = place_key(place) else {
++            return Ok(());
++        };
++        if state.seen_ghost_never {
++            for moved in state.moved.iter() {
++                if places_overlap(moved, &key) {
++                    return Err(error(
++                        span,
++                        format!(
++                            "use of possibly moved value `{}`",
++                            crate::def::user_local_name(&key.root)
++                        ),
++                    ));
++                }
++            }
++        }
++        state.moved.push(key);
++        Ok(())
++    }
++
++    fn merge_branch_states(base_seen: bool, branches: Vec<NeverTailState>) -> NeverTailState {
++        let seen_ghost_never =
++            base_seen || (branches.len() > 0 && branches.iter().all(|s| s.seen_ghost_never));
++        let mut moved = Vec::new();
++        for branch in branches {
++            moved.extend(branch.moved);
++        }
++        NeverTailState { seen_ghost_never, moved }
++    }
++
++    fn scan_stmt(
++        stmt: &Stmt,
++        state: &mut NeverTailState,
++        datatypes: &HashMap<Path, Datatype>,
++        functions: &HashMap<Fun, Function>,
++        var_modes: &HashMap<VarIdent, Mode>,
++    ) -> Result<(), VirErr> {
++        match &stmt.x {
++            StmtX::Expr(expr) => scan_expr(expr, state, datatypes, functions, var_modes),
++            StmtX::Decl { init, els, .. } => {
++                if let Some(init) = init {
++                    scan_place(init, state, datatypes, functions, var_modes)?;
++                }
++                if let Some(els) = els {
++                    scan_expr(els, state, datatypes, functions, var_modes)?;
++                }
++                Ok(())
++            }
++        }
++    }
++
++    fn scan_place(
++        place: &Place,
++        state: &mut NeverTailState,
++        datatypes: &HashMap<Path, Datatype>,
++        functions: &HashMap<Fun, Function>,
++        var_modes: &HashMap<VarIdent, Mode>,
++    ) -> Result<(), VirErr> {
++        match &place.x {
++            PlaceX::Field(_, place)
++            | PlaceX::DerefMut(place)
++            | PlaceX::ModeUnwrap(place, _)
++            | PlaceX::UserDefinedTypInvariantObligation(place, _) => {
++                scan_place(place, state, datatypes, functions, var_modes)
++            }
++            PlaceX::Temporary(expr) => scan_expr(expr, state, datatypes, functions, var_modes),
++            PlaceX::WithExpr(expr, place) => {
++                scan_expr(expr, state, datatypes, functions, var_modes)?;
++                scan_place(place, state, datatypes, functions, var_modes)
++            }
++            PlaceX::Index(place, idx, _, _) => {
++                scan_place(place, state, datatypes, functions, var_modes)?;
++                scan_expr(idx, state, datatypes, functions, var_modes)
++            }
++            PlaceX::Local(_) => Ok(()),
++        }
++    }
++
++    fn scan_exprs(
++        exprs: &Exprs,
++        state: &mut NeverTailState,
++        datatypes: &HashMap<Path, Datatype>,
++        functions: &HashMap<Fun, Function>,
++        var_modes: &HashMap<VarIdent, Mode>,
++    ) -> Result<(), VirErr> {
++        for expr in exprs.iter() {
++            scan_expr(expr, state, datatypes, functions, var_modes)?;
++        }
++        Ok(())
++    }
++
++    fn scan_expr(
++        expr: &Expr,
++        state: &mut NeverTailState,
++        datatypes: &HashMap<Path, Datatype>,
++        functions: &HashMap<Fun, Function>,
++        var_modes: &HashMap<VarIdent, Mode>,
++    ) -> Result<(), VirErr> {
++        match &expr.x {
++            ExprX::Const(_)
++            | ExprX::Var(_)
++            | ExprX::VarLoc(_)
++            | ExprX::VarAt(..)
++            | ExprX::ConstVar(..)
++            | ExprX::StaticVar(_)
++            | ExprX::NullaryOpr(_)
++            | ExprX::ExecFnByName(_)
++            | ExprX::AirStmt(_)
++            | ExprX::Nondeterministic => {}
++            ExprX::Loc(e)
++            | ExprX::Unary(_, e)
++            | ExprX::UnaryOpr(_, e)
++            | ExprX::AssertCompute(e, _)
++            | ExprX::Ghost { expr: e, .. }
++            | ExprX::ProofInSpec(e)
++            | ExprX::NeverToAny(e)
++            | ExprX::Old(e) => {
++                scan_expr(e, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::Binary(_, e1, e2) | ExprX::BinaryOpr(_, e1, e2) => {
++                scan_expr(e1, state, datatypes, functions, var_modes)?;
++                scan_expr(e2, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::Multi(_, exprs) | ExprX::ArrayLiteral(exprs) => {
++                scan_exprs(exprs, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::Call(call_target, exprs, post_args) => {
++                if let CallTarget::FnSpec(e) = call_target {
++                    scan_expr(e, state, datatypes, functions, var_modes)?;
++                }
++                scan_exprs(exprs, state, datatypes, functions, var_modes)?;
++                if let Some(post_args) = post_args {
++                    scan_expr(post_args, state, datatypes, functions, var_modes)?;
++                }
++            }
++            ExprX::Ctor(_, _, fields, update) => {
++                for field in fields.iter() {
++                    scan_expr(&field.a, state, datatypes, functions, var_modes)?;
++                }
++                if let Some(update) = update {
++                    scan_place(&update.place, state, datatypes, functions, var_modes)?;
++                }
++            }
++            ExprX::Assign { lhs, rhs, .. } => {
++                scan_expr(rhs, state, datatypes, functions, var_modes)?;
++                scan_expr(lhs, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::AssignToPlace { place, rhs, .. } => {
++                scan_expr(rhs, state, datatypes, functions, var_modes)?;
++                scan_place(place, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::AssertAssume { expr: e, .. }
++            | ExprX::AssertAssumeUserDefinedTypeInvariant { expr: e, .. } => {
++                scan_expr(e, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::AssertBy { proof, .. } | ExprX::AssertQuery { proof, .. } => {
++                scan_expr(proof, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::If(cond, then_expr, else_expr) => {
++                scan_expr(cond, state, datatypes, functions, var_modes)?;
++                let after_cond = state.clone();
++                let mut then_state = after_cond.clone();
++                scan_expr(then_expr, &mut then_state, datatypes, functions, var_modes)?;
++                let mut else_state = after_cond.clone();
++                if let Some(else_expr) = else_expr {
++                    scan_expr(else_expr, &mut else_state, datatypes, functions, var_modes)?;
++                }
++                *state =
++                    merge_branch_states(after_cond.seen_ghost_never, vec![then_state, else_state]);
++            }
++            ExprX::Match(place, arms) => {
++                scan_place(place, state, datatypes, functions, var_modes)?;
++                let after_place = state.clone();
++                let mut branch_states = Vec::new();
++                for arm in arms.iter() {
++                    let mut arm_state = after_place.clone();
++                    scan_expr(&arm.x.guard, &mut arm_state, datatypes, functions, var_modes)?;
++                    scan_expr(&arm.x.body, &mut arm_state, datatypes, functions, var_modes)?;
++                    branch_states.push(arm_state);
++                }
++                *state = merge_branch_states(after_place.seen_ghost_never, branch_states);
++            }
++            ExprX::Loop { body, cond, invs, decrease, .. } => {
++                if let Some(cond) = cond {
++                    scan_expr(cond, state, datatypes, functions, var_modes)?;
++                }
++                let mut loop_state = NeverTailState { seen_ghost_never: false, moved: Vec::new() };
++                scan_expr(body, &mut loop_state, datatypes, functions, var_modes)?;
++                for inv in invs.iter() {
++                    scan_expr(&inv.inv, &mut loop_state, datatypes, functions, var_modes)?;
++                }
++                scan_exprs(decrease, &mut loop_state, datatypes, functions, var_modes)?;
++            }
++            ExprX::OpenInvariant(arg, _, body, _) => {
++                scan_expr(arg, state, datatypes, functions, var_modes)?;
++                scan_expr(body, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::Return(e) => {
++                if let Some(e) = e {
++                    scan_expr(e, state, datatypes, functions, var_modes)?;
++                }
++            }
++            ExprX::BreakOrContinue { .. } => {}
++            ExprX::Block(stmts, body) => {
++                for stmt in stmts.iter() {
++                    scan_stmt(stmt, state, datatypes, functions, var_modes)?;
++                }
++                if let Some(body) = body {
++                    scan_expr(body, state, datatypes, functions, var_modes)?;
++                }
++            }
++            ExprX::BorrowMut(place)
++            | ExprX::TwoPhaseBorrowMut(place)
++            | ExprX::ImplicitReborrowOrSpecRead(place, _, _) => {
++                scan_place(place, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::ReadPlace(place, read_kind) => {
++                scan_place(place, state, datatypes, functions, var_modes)?;
++                if matches!(read_kind.preliminary_kind, ReadKind::Move) {
++                    record_move(state, place, &expr.span)?;
++                }
++            }
++            ExprX::EvalAndResolve(e1, e2) => {
++                scan_expr(e1, state, datatypes, functions, var_modes)?;
++                scan_expr(e2, state, datatypes, functions, var_modes)?;
++            }
++            ExprX::Quant(..)
++            | ExprX::Closure(..)
++            | ExprX::NonSpecClosure { .. }
++            | ExprX::Choose { .. }
++            | ExprX::WithTriggers { .. }
++            | ExprX::Fuel(..)
++            | ExprX::RevealString(_)
++            | ExprX::Header(_) => {}
++        }
++
++        if expr_is_ghost_never_source(expr, datatypes, functions, var_modes) {
++            state.seen_ghost_never = true;
++        }
++        Ok(())
++    }
++
++    let mut state = NeverTailState { seen_ghost_never: false, moved: Vec::new() };
++    scan_expr(expr, &mut state, datatypes, functions, var_modes)
++}
++
++
+ /// Represents the tree structure of "places" under consideration.
+ #[derive(Debug)]
+ enum PlaceTree {
+@@ -457,6 +1051,7 @@ struct Builder<'a> {
+     assigns_to_resolve: Vec<AstId>,
+     typ_inv_obligations: Vec<(AstId, Fun)>,
+     errors: Vec<VirErr>,
++    never_to_any_is_reachable: bool,
+ 
+     /// Loop stack, outermost to innermost
+     loops: Vec<LoopEntry>,
+@@ -522,6 +1117,29 @@ fn new_cfg<'a>(
+     functions: &'a HashMap<Fun, Function>,
+     var_modes: &'a HashMap<VarIdent, Mode>,
+     temporary_modes: &'a HashMap<AstId, Mode>,
++) -> Result<(CFG<'a>, Vec<AstId>, Vec<(AstId, Fun)>), VirErr> {
++    new_cfg_with_options(
++        params,
++        body,
++        read_kind_finals,
++        datatypes,
++        functions,
++        var_modes,
++        temporary_modes,
++        false,
++    )
++}
++
++/// Compute the CFG for the given expression.
++fn new_cfg_with_options<'a>(
++    params: &Params,
++    body: &Expr,
++    read_kind_finals: &'a ReadKindFinals,
++    datatypes: &'a HashMap<Path, Datatype>,
++    functions: &'a HashMap<Fun, Function>,
++    var_modes: &'a HashMap<VarIdent, Mode>,
++    temporary_modes: &'a HashMap<AstId, Mode>,
++    never_to_any_is_reachable: bool,
+ ) -> Result<(CFG<'a>, Vec<AstId>, Vec<(AstId, Fun)>), VirErr> {
+     let mut var_modes = var_modes.clone();
+     for p in params.iter() {
+@@ -535,6 +1153,7 @@ fn new_cfg<'a>(
+         assigns_to_resolve: vec![],
+         typ_inv_obligations: vec![],
+         errors: vec![],
++        never_to_any_is_reachable,
+         locals: LocalCollection {
+             locals: vec![],
+             ident_to_idx: HashMap::new(),
+@@ -1087,8 +1706,12 @@ impl<'a> Builder<'a> {
+                 Ok(bb)
+             }
+             ExprX::NeverToAny(e) => {
+-                let _ = self.build(e, bb)?;
+-                Err(())
++                let bb = self.build(e, bb)?;
++                if self.never_to_any_is_reachable {
++                    Ok(bb)
++                } else {
++                    Err(())
++                }
+             }
+             ExprX::AssignToPlace { place, rhs, op, resolve, typ: _ } => {
+                 assert!(!resolve);
+@@ -1365,7 +1988,12 @@ impl<'a> Builder<'a> {
+             }
+             PlaceX::Temporary(e) => {
+                 let bb = self.build(e, bb)?;
+-                let mode = self.locals.temporary_modes[&place.span.id];
++                let mode = self
++                    .locals
++                    .temporary_modes
++                    .get(&place.span.id)
++                    .copied()
++                    .unwrap_or(Mode::Spec);
+                 if mode == Mode::Spec {
+                     Ok((ComputedPlaceTyped::Ghost(None), bb))
+                 } else {
+@@ -1413,7 +2041,8 @@ impl<'a> Builder<'a> {
+     fn is_move(&self, unfinal_read_kind: &UnfinalizedReadKind) -> bool {
+         match &unfinal_read_kind.preliminary_kind {
+             ReadKind::Move => {
+-                matches!(self.read_kind_finals[&unfinal_read_kind.id], ReadKind::Move)
++                self.never_to_any_is_reachable
++                    || matches!(self.read_kind_finals[&unfinal_read_kind.id], ReadKind::Move)
+             }
+             _ => false,
+         }
+@@ -3105,6 +3734,111 @@ fn get_resolutions(cfg: &CFG) -> Vec<ResolutionToInsert> {
+     output
+ }
+ 
++fn check_uses_initialized(cfg: &CFG, body_span: &Span) -> Result<(), VirErr> {
++    let move_places = cfg.locals.places_skip_insides_of_mut_refs();
++    let move_analyses: Vec<DataflowOutput<MovePossibilities>> =
++        move_places
++            .iter()
++            .map(|place| {
++                do_dataflow::<MovePossibilities>(
++                    cfg,
++                    MovePossibilities::empty(),
++                    MovePossibilities::entry(),
++                    place,
++                    Direction::Forward,
++                )
++            })
++            .collect();
++
++    for (bb_idx, bb) in cfg.basic_blocks.iter().enumerate() {
++        for (instr_idx, instr) in bb.instructions.iter().enumerate() {
++            let place = match &instr.kind {
++                InstructionKind::MoveFrom(place) => place,
++                InstructionKind::Mutate(_)
++                | InstructionKind::Overwrite(_)
++                | InstructionKind::DropFrom(_) => continue,
++            };
++            if cfg.locals.locals[place.local].name.is_temp() {
++                continue;
++            }
++            if is_generated_tmp_local(&cfg.locals.locals[place.local].name) {
++                continue;
++            }
++
++            for (move_place, analysis) in move_places.iter().zip(move_analyses.iter()) {
++                if cfg.locals.locals[move_place.local].name.is_temp() {
++                    continue;
++                }
++                if is_generated_tmp_local(&cfg.locals.locals[move_place.local].name) {
++                    continue;
++                }
++                if place.contains(move_place) && analysis.output[bb_idx][instr_idx].can_be_moved {
++                    let place_str = pretty_flattened_place(&cfg.locals, place);
++                    return Err(error(
++                        body_span,
++                        format!("use of possibly moved value `{}`", place_str),
++                    ));
++                }
++            }
++        }
++    }
++
++    Ok(())
++}
++
++#[derive(Clone, Copy, PartialEq, Eq, Debug)]
++struct MovePossibilities {
++    can_be_moved: bool,
++}
++
++impl DataflowState for MovePossibilities {
++    type Const = FlattenedPlace;
++
++    fn join(&mut self, b: &Self) {
++        *self = MovePossibilities { can_be_moved: self.can_be_moved || b.can_be_moved };
++    }
++
++    fn transfer(&self, instr: &Instruction, place: &FlattenedPlace) -> Self {
++        match &instr.kind {
++            InstructionKind::MoveFrom(sp) | InstructionKind::DropFrom(sp) => {
++                if sp.contains(place) {
++                    MovePossibilities { can_be_moved: true }
++                } else {
++                    *self
++                }
++            }
++            InstructionKind::Overwrite(sp) => {
++                if sp.contains(place) {
++                    MovePossibilities { can_be_moved: false }
++                } else {
++                    *self
++                }
++            }
++            InstructionKind::Mutate(_sp) => *self,
++        }
++    }
++}
++
++impl MovePossibilities {
++    fn empty() -> Self {
++        MovePossibilities { can_be_moved: false }
++    }
++
++    fn entry() -> Self {
++        MovePossibilities { can_be_moved: false }
++    }
++}
++
++fn is_generated_tmp_local(name: &LocalName) -> bool {
++    match name {
++        LocalName::Named(var_ident) => {
++            let name = crate::def::user_local_name(var_ident);
++            name == "verus_tmp" || name.starts_with("verus_tmp_")
++        }
++        LocalName::Temporary(..) => true,
++    }
++}
++
+ fn get_resolutions_for_place(
+     cfg: &CFG,
+     place: &FlattenedPlace,
