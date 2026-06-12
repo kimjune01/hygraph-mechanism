@@ -1,6 +1,6 @@
 # The Hypothesis Graph Is Load-Bearing
 
-A mechanism paper, not a performance paper.
+*A mechanism paper, not a performance paper — the evidence, harness, and full reasoning trail behind it.*
 
 **Claim.** A harness-level data structure, the typed hypothesis graph, makes
 bugfixes succeed that the same model cannot reach without it, on real GitHub
@@ -10,7 +10,17 @@ generates the structure. It is not a resolve-rate claim.
 
 ---
 
-**Start here:** [`LESSONS.md`](LESSONS.md) — distilled findings + methodological lessons (the worklog, condensed). [`REPRODUCE.md`](REPRODUCE.md) — how to re-derive them. The headline case is [`pilots/11-verus-2219/`](pilots/11-verus-2219/) (a soundness bug whose fix is an XOR-shaped predicate). Raw chronology in [`worklog/`](worklog/).
+### If you arrived from the paper
+
+This repo holds the controlled cases, the grading harness, and the complete reasoning trail. A short map:
+
+- [`LESSONS.md`](LESSONS.md) — the findings and methodological lessons, distilled from the worklog. **Read this first.**
+- [`REPRODUCE.md`](REPRODUCE.md) — how to re-derive them, and the five traps that produce false results if skipped.
+- [`pilots/11-verus-2219/`](pilots/11-verus-2219/) — the headline case: a verifier soundness bug whose correct fix is an XOR-shaped predicate (see its [`MANIFEST.md`](pilots/11-verus-2219/MANIFEST.md)).
+- [`OPERATIONS.md`](OPERATIONS.md) · [`METHODOLOGY-preregistration.md`](METHODOLOGY-preregistration.md) — the protocol and the pre-registration.
+- [`worklog/`](worklog/) — the raw chronology (`WORK_LOG.md`) and the independent Fable arm (`FABLE_WORKLOG.md`).
+
+The narrative below is the conceptual spine: why the standard benchmark can't measure the mechanism, and what regime can.
 
 ---
 
