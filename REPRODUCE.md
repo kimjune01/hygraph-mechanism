@@ -1,6 +1,6 @@
 # Reproducing the results
 
-This repo is a mechanism case study, not a benchmark. Reproduction means re-deriving the *specific findings* under control, not a population rate. Start with [`LESSONS.md`](LESSONS.md) for what was found and [`README.md`](README.md) for why the regime matters.
+This repo is a mechanism case study, not a benchmark. Reproduction means re-deriving the *specific findings* under control, not a population rate. Start with the visual [`RESULTS.md`](RESULTS.md) and [`LESSONS.md`](LESSONS.md) for what was found and [`README.md`](README.md) for why the regime matters.
 
 ## Headline case: verus #2219 (pilot 11)
 

@@ -19,7 +19,8 @@ The tool this work produced lives in its own repo:
 
 This repo holds the controlled cases, the grading harness, and the complete reasoning trail. A short map:
 
-- [`LESSONS.md`](LESSONS.md) — the findings and methodological lessons, distilled from the worklog. **Read this first.**
+- [`RESULTS.md`](RESULTS.md) — the visual dashboard: the arc, the family split, the battery, and diagrams. **Start here for the picture.**
+- [`LESSONS.md`](LESSONS.md) — the findings and methodological lessons, distilled from the worklog.
 - [`REPRODUCE.md`](REPRODUCE.md) — how to re-derive them, and the five traps that produce false results if skipped.
 - [`pilots/11-verus-2219/`](pilots/11-verus-2219/) — the headline case: a verifier soundness bug whose correct fix is an XOR-shaped predicate (see its [`MANIFEST.md`](pilots/11-verus-2219/MANIFEST.md)).
 - [`OPERATIONS.md`](OPERATIONS.md) · [`METHODOLOGY-preregistration.md`](METHODOLOGY-preregistration.md) — the protocol and the pre-registration.
