@@ -12,6 +12,11 @@ generates the structure. It is not a resolve-rate claim.
 
 ### If you arrived from the paper
 
+The tool this work produced lives in its own repo:
+
+> ### → [**abductor**](https://github.com/kimjune01/abductor)
+> Execution-gated abductive evaluation for LLM program repair — the `case-check` gate, generalized and AGPL-licensed. Ships the `/debug` skill and an example prompt.
+
 This repo holds the controlled cases, the grading harness, and the complete reasoning trail. A short map:
 
 - [`LESSONS.md`](LESSONS.md) — the findings and methodological lessons, distilled from the worklog. **Read this first.**
