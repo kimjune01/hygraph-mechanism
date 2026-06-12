@@ -24,6 +24,7 @@ flips base->reject) to defeat the vendored-crate stale-binary trap that produced
 | Fable | self_verifier (strong) | Agent | 269 | all ok | REJECT (over) | WIDE-BUT-BROKEN |
 | Fable | minimal_v3_fable (weak) | headless | 269 | all ok | REJECT (over) | WIDE-BUT-BROKEN |
 | Fable | minimal_v3 codex-exact (controlled) | headless | 269 | all ok | REJECT (over) | WIDE-BUT-BROKEN |
+| Fable | gate2 (diagnosis-supplied, hill-climb) | headless | 269 | all ok | t3/seal_proofdiv/seal_exec VERIFY, ho5 over | PARTIAL near-A (broke the p1 wall) |
 
 Reading: prompt-method engineering lifted neither model (codex 0/18 narrow; Fable strong ~ weak,
 identical external grade). What lifted: the execution-gated tool for codex (114 -> 269), and raw
@@ -116,23 +117,70 @@ codex-CLI). (2) n=1 per cell. (3) "lift" = narrow -> wide-but-broken, NOT narrow
 wide is still broken on divergence. (4) the wide-but-broken vs narrow boundary is the only model
 difference observed; on the divergence arm the models are tied (both fail).
 
-## NEXT RUN (open thread, not yet run on any box)
+## 2026-06-12 08:52 - gate2-Fable RESULT: PARTIAL near-A. Calibration was the binding constraint; the lift is bounded by the calibration's coverage.
 
-gate2-Fable: hand Fable the divergence DIAGNOSIS (gate2_arm.txt + the gate2/sealed held-outs as the
-calibration it lacked) and ask whether it can IMPLEMENT the fix. This is the cross-family completion of
-codex's outcome C (codex gate2 arm is the one still grinding on the other machine).
+Ran on this box (M4 Pro) headless, ~100 min, against the corrected local/gate.sh (python3.13 +
+--calibration; the committed gate2/gate.sh has a stale python3/no-calibration bug that would never let
+case-check pass). The gate supplies the p1 over-rejection diagnosis = the calibration the weak draw's v7
+self-mislabel showed it lacked. Patch fable_gate2.patch (503-line diff, 280 ins, 7 files). Identity-
+verified driver fp 37629a9c (reproduced after target-verus moved aside; t1 base->reject).
 
-Why it is sharper after the v7 finding: Fable's miss was specifically CALIBRATION, not enumeration (it
-built the discriminating case v7 and mislabeled it). gate2 supplies exactly the missing label. So the
-run distinguishes two hypotheses:
-- given the correct label, Fable implements the ghost-vs-genuine-divergence discriminator => the wall
-  was calibration (a near-A; the model can do the XOR once told where it is wrong).
-- given the label, Fable still oscillates / cannot encode it => implementation wall, cross-family
-  (same failure shape as codex's gate2 outcome).
+GATE iteration history (from the session transcript, 12 gate runs):
+  #1 bug-accepted=155      (partial)
+  #2 bug-accepted=269      (regressed to base)
+  #3 bug-accepted=78
+  #4 bug=0 preserve-rej=106 over-rej: p1 p2   <- general on bug, WIDE-BUT-BROKEN (same state as every prior draw)
+  #5 bug=0 over-rej: p1                         <- cleared p2 + case-check, stuck on p1
+  #6-#10 bug=0 over-rej: p1                      <- STUCK on p1 for 5 gate runs / ~16 min (the divergence wall)
+  #11 GATE pass=true                            <- BROKE THROUGH p1
+  #12 GATE pass=true                            (clean re-pass)
 
-State: the M4 Pro (this box) ran the two minimal variants (weak minimal_v3_fable + controlled
-codex-exact minimal_v3), NOT gate2. gate2-Fable is the next run when a box is spun back up. This box
-stays cool for now.
+The wall is visible and real: Fable reached the wide-but-broken plateau (#4) that killed codex-tool and
+all three prior Fable draws, then sat over-rejecting p1 for 5 consecutive gate runs, then broke through.
+Repeated "over-rej: p1" feedback (the calibration) drove the breakthrough.
+
+External force-fresh grade (HELD-OUT decider = seal_proofdiv, the unseen p1 twin):
+- t1/t2 REJECT, h2_assoc/h2_nested REJECT  (bug arm general, incl out-of-grammar)
+- t3 (=p1, in gate preserve) VERIFY
+- seal_proofdiv (HELD-OUT twin of p1, declared-! proof divergence) VERIFY  <- GENERALIZED, not tabulated
+- seal_exec (HELD-OUT exec divergence) VERIFY
+- ho5 (HELD-OUT, divergence via generic mk::<!>() ) REJECT  <- RESIDUAL over-rejection
+- case-check: changed=269 exactly, pass=true, valid-preserve-rejected=0, mishandles=0, crash=0
+
+Verdict: PARTIAL near-A.
+- NOT the implementation wall (it reached pass=true; codex's gate2 outcome was the contrast we expected).
+- NOT pure tabulation (it generalized to the unseen seal_proofdiv twin + seal_exec, not just fit p1).
+- NOT clean near-A either (ho5 still over-rejected).
+
+Why ho5 survives (precise mechanism): Fable's genuine-divergence carve-out is SYNTACTIC - exec fns,
+functions declared `-> !`, functions with literal requires/ensures false. p1/t3 and seal_proofdiv are
+`axiom fn ... -> (tracked x: !)` (declared `!` -> carve-out fires -> VERIFY). ho5 is
+`proof fn mk<T>() -> (tracked v: T) { loop{} }` called at `T=!`: the divergence is real (loop) but the
+signature declares `T` (generic), matches no carve-out, so Fable treats the instantiated-! return as the
+bug and over-rejects. The gate never calibrated this shape (preserve = p1/p2, both declared-! axioms), so
+Fable solved the calibrated shape + its held-out twin but not the un-calibrated generic-instantiation
+shape.
+
+Thesis: STRONGLY supports calibration as the binding constraint. Given the label, Fable did what no
+uncalibrated draw could - implemented a real ghost-vs-genuine-divergence discriminator and broke the wall
+that defeated codex-tool and all three prior Fable draws. Implementation was NOT the wall. BUT the lift
+is bounded by the calibration's COVERAGE: the gate calibrated declared-! divergence (p1), Fable solved
+that shape and generalized to its held-out twin (seal_proofdiv) + exec (seal_exec), and missed exactly
+the shape the gate never surfaced (ho5, generic-instantiation divergence). This rhymes with the original
+case-check coverage-blind-spot finding: a gate lifts the model precisely as far as the gate's coverage,
+and the model generalizes within the calibrated shape but not beyond it. Calibration unblocks
+implementation; coverage bounds the unblocking.
+
+Caveats: n=1; model+harness (claude-headless) not codex-CLI; the corrected gate was required (committed
+gate had a python/calibration bug). The codex gate2 arm (other machine) is the same-prompt comparator;
+when it lands, compare: did codex also break the p1 wall, or stall (implementation wall, the original C)?
+
+## NEXT (open threads)
+
+- codex gate2 (other machine, still grinding): the cross-family comparator. If codex stalls on p1 where
+  Fable broke through, that is a model difference at the implementation arm, not just the bug arm.
+- ho5-shape calibration: add a generic-instantiation-divergence preserve case to the gate and re-run
+  gate2-Fable; does it then also solve ho5 (coverage-bounded lift confirmed) or hit a deeper wall?
 
 ## 2026-06-12 - TRACE analysis of the weak draw: the v7 self-mislabel (calibration is the wall, not enumeration)
 
