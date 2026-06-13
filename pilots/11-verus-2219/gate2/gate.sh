@@ -10,7 +10,7 @@ export PATH="$WT/tools/vargo/target/release:/tmp/rustup-shims:$PATH"; unset RUST
 find "$WT"/source/rustc_mir_build/src "$WT"/source/rust_verify/src -name '*.rs' -exec touch {} + 2>/dev/null
 ( cd "$WT/source" && vargo build --release ) >/tmp/gate2-build.log 2>&1 || { echo "GATE pass=false reason=BUILD_FAILED"; tail -3 /tmp/gate2-build.log; exit 0; }
 BIN="$WT/source/target-verus/release/verus"
-cc=$(cd "$CC" && python3 case-check.py --candidate-verus "$BIN" --calibration "$CC/calibration.json" --jobs 8 2>/dev/null | grep -oE 'pass=(true|false)|mishandles=[0-9]+|valid-bug-still-accepted=[0-9]+|valid-preserve-rejected=[0-9]+|crash=[0-9]+')
+cc=$(cd "$CC" && python3.13 case-check.py --candidate-verus "$BIN" --calibration "$CC/calibration.json" --jobs 8 2>/dev/null | grep -oE 'pass=(true|false)|mishandles=[0-9]+|valid-bug-still-accepted=[0-9]+|valid-preserve-rejected=[0-9]+|crash=[0-9]+')
 ccpass=$(echo "$cc" | grep -oE 'pass=(true|false)' | cut -d= -f2)
 overrej=""
 for f in "$PRESERVE"/*.rs; do
