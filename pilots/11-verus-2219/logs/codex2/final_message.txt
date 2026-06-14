@@ -1,0 +1,23 @@
+VERDICT: `GATE pass=true?` No. Latest gate result:
+
+```text
+GATE pass=false
+case-check: crash=1250
+mishandles=0
+valid-bug-still-accepted=0
+valid-preserve-rejected=0
+```
+
+Changed files/functions:
+`source/rust_verify/src/rust_to_vir_expr.rs`: added rustc inhabitedness marking for expression/place result types.
+`source/vir/src/modes.rs`: added continuation-sensitive rejection for ghost/proof uninhabited expressions, structural uninhabited-type detection, and stripping of extra expression-local `Never` markers after mode checking.
+
+Root cause + fix: rustc treats erased ghost/proof expressions of uninhabited type as divergent, so later code is considered unreachable and affine tracked-resource misuse can escape borrow/linearity checking. The patch carries rustc’s uninhabitedness information into VIR expression types, detects non-explicit-control-flow ghost uninhabited expressions before later lexical code, and rejects those cases. This semantically closes the gate’s bug/preserve counters, but the gate still classifies these early mode errors as crashes, so this is not DONE.
+
+`git diff --stat`:
+
+```text
+ source/rust_verify/src/rust_to_vir_expr.rs |  33 +++++++
+ source/vir/src/modes.rs                    | 144 ++++++++++++++++++++++++++++-
+ 2 files changed, 172 insertions(+), 5 deletions(-)
+```

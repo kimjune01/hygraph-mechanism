@@ -24,7 +24,7 @@ DISPOSITION: ACCEPTED as a caveat in both RESULTS and LESSONS. PARTIAL PUSHBACK:
 DISPOSITION: FIXED.
 
 ## To strengthen (codex) — open follow-ups, NOT yet done:
-- [ ] Protocol-matched codex gate2 rerun (4h + pass-snapshot + keepalive). The key control for the fairness critique.
+- [x] Protocol-matched codex gate2 rerun (4h + pass-snapshot + keepalive). DONE 2026-06-13 (logs/codex2/): still NO pass, crash=1250, p1 over-rejected. Divergence wall survives the matched protocol; only the failure mode shifted (oscillation->crash). Fairness critique answered: codex walls under Sonnet's exact protocol.
 - [ ] Report Sonnet run 1 and run 2 as separate cells (run 1 = walled). Done in RESULTS stop-rule column; could be a full row.
 - [ ] >=3 seeds per workflow (currently n=1).
 - [ ] Source the cutoff/release dates (Sonnet, Composer/Kimi) — added to NOTES refs.
