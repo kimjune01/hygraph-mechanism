@@ -1,0 +1,235 @@
+[1;34mvargo info: [0m[34mbuilding rust_verify[0m
+   Compiling proc-macro2 v1.0.101
+   Compiling unicode-ident v1.0.18
+   Compiling version_check v0.9.5
+   Compiling autocfg v1.4.0
+   Compiling libc v0.2.172
+   Compiling cfg-if v1.0.0
+   Compiling once_cell v1.21.3
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.7.4
+   Compiling typenum v1.18.0
+   Compiling serde v1.0.228
+   Compiling pin-project-lite v0.2.16
+   Compiling futures-sink v0.3.31
+   Compiling zerocopy v0.8.25
+   Compiling futures-core v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling utf8parse v0.2.2
+   Compiling heck v0.5.0
+   Compiling parking_lot_core v0.8.6
+   Compiling futures-channel v0.3.31
+   Compiling futures-task v0.3.31
+   Compiling rustversion v1.0.21
+   Compiling generic-array v0.14.7
+   Compiling proc-macro-error-attr v1.0.4
+   Compiling ahash v0.8.12
+   Compiling num-traits v0.2.19
+   Compiling lock_api v0.4.13
+   Compiling syn v1.0.109
+   Compiling slab v0.4.12
+   Compiling futures-io v0.3.31
+   Compiling proc-macro-error v1.0.4
+   Compiling anstyle-parse v0.2.7
+   Compiling instant v0.1.13
+   Compiling getrandom v0.3.3
+   Compiling hashbrown v0.16.0
+   Compiling quote v1.0.40
+   Compiling anstyle-query v1.1.5
+   Compiling smallvec v1.15.1
+   Compiling syn v2.0.101
+   Compiling equivalent v1.0.2
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle v1.0.13
+   Compiling scopeguard v1.2.0
+   Compiling colorchoice v1.0.4
+   Compiling rustix v1.1.2
+   Compiling num-integer v0.1.46
+   Compiling anstream v0.6.21
+   Compiling indexmap v2.12.0
+   Compiling aho-corasick v1.1.3
+   Compiling itoa v1.0.15
+   Compiling allocator-api2 v0.2.21
+   Compiling serde_json v1.0.146
+   Compiling either v1.15.0
+   Compiling clap_lex v0.7.6
+   Compiling strsim v0.11.1
+   Compiling semver v1.0.26
+   Compiling bitflags v2.9.1
+   Compiling regex-syntax v0.8.5
+   Compiling hashbrown v0.14.5
+   Compiling clap_builder v4.5.53
+   Compiling errno v0.3.14
+   Compiling num-iter v0.1.45
+   Compiling num-complex v0.4.6
+   Compiling serde_derive v1.0.228
+   Compiling futures-macro v0.3.31
+   Compiling futures-util v0.3.31
+   Compiling regex-automata v0.4.9
+   Compiling parking_lot v0.11.2
+   Compiling strum_macros v0.26.4
+   Compiling clap_derive v4.5.49
+   Compiling indexmap v1.9.3
+   Compiling heck v0.4.1
+   Compiling fastrand v2.3.0
+   Compiling fixedbitset v0.4.2
+   Compiling ryu v1.0.20
+   Compiling byteorder v1.5.0
+   Compiling tempfile v3.23.0
+   Compiling fxhash v0.2.1
+   Compiling petgraph v0.6.5
+   Compiling clap v4.5.53
+   Compiling regex v1.11.1
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.6
+   Compiling bitmask-enum v2.2.5
+   Compiling lasso v0.7.3
+   Compiling bitmaps v2.1.0
+   Compiling im v15.1.0
+   Compiling portable-atomic v1.11.1
+   Compiling rand_core v0.6.4
+   Compiling unicode-width v0.1.14
+   Compiling hashbrown v0.12.3
+   Compiling nonmax v0.5.5
+   Compiling typed-index-collections v3.5.0
+   Compiling getopts v0.2.21 (https://github.com/utaal/getopts.git?branch=parse-partial#1ba7b831)
+   Compiling sized-chunks v0.6.5
+   Compiling rand_xoshiro v0.6.0
+   Compiling num-bigint v0.4.6
+   Compiling duplicate v1.0.0
+   Compiling strum v0.26.3
+   Compiling digest v0.10.7
+   Compiling futures-executor v0.3.31
+   Compiling tracing-attributes v0.1.30
+   Compiling futures v0.3.31
+   Compiling wasm-timer v0.2.5
+   Compiling cpufeatures v0.2.17
+   Compiling synstructure v0.13.2
+   Compiling tracing-core v0.1.34
+   Compiling sise v0.6.0
+   Compiling num-rational v0.4.2
+   Compiling yansi v0.5.1
+   Compiling unicode-width v0.2.0
+   Compiling console v0.15.11
+   Compiling sha2 v0.10.9
+   Compiling bincode v1.3.3
+   Compiling vir-macros v0.1.0 (/Users/junekim/Documents/verus-p11/source/vir_macros)
+   Compiling num v0.4.3
+   Compiling itertools v0.12.1
+   Compiling arrayvec v0.7.6
+   Compiling number_prefix v0.4.0
+   Compiling indicatif v0.17.11
+   Compiling num-format v0.4.4
+   Compiling internals_interface v0.1.0 (/Users/junekim/Documents/verus-p11/source/tools/internals_interface)
+   Compiling tracing v0.1.41
+   Compiling smt-scope v0.1.7
+   Compiling hex v0.4.3
+   Compiling rustc_mir_build v0.0.0 (/Users/junekim/Documents/verus-p11/source/rustc_mir_build)
+   Compiling air v0.1.0 (/Users/junekim/Documents/verus-p11/source/air)
+   Compiling vir v0.1.0 (/Users/junekim/Documents/verus-p11/source/vir)
+   Compiling rust_verify v0.1.0 (/Users/junekim/Documents/verus-p11/source/rust_verify)
+    Finished `release` profile [optimized] target(s) in 27.42s
+[1;34mvargo info: [0m[34mbuilding verus_builtin[0m
+   Compiling verus_builtin v0.0.0-2026-05-17-0151 (/Users/junekim/Documents/verus-p11/source/builtin)
+    Finished `release` profile [optimized] target(s) in 0.13s
+[1;34mvargo info: [0m[34mbuilding verus_builtin_macros[0m
+   Compiling proc-macro2 v1.0.101
+   Compiling verus_syn v0.0.0-2026-05-31-0205 (/Users/junekim/Documents/verus-p11/dependencies/syn)
+   Compiling verus_prettyplease v0.0.0-2026-05-31-0205 (/Users/junekim/Documents/verus-p11/dependencies/prettyplease)
+   Compiling quote v1.0.40
+   Compiling syn v2.0.101
+   Compiling synstructure v0.13.2
+   Compiling verus_builtin_macros v0.0.0-2026-05-31-0205 (/Users/junekim/Documents/verus-p11/source/builtin_macros)
+    Finished `release` profile [optimized] target(s) in 9.47s
+[1;34mvargo info: [0m[34mbuilding verus_state_machines_macros[0m
+   Compiling hashbrown v0.12.3
+   Compiling indexmap v1.9.3
+   Compiling verus_state_machines_macros v0.0.0-2026-05-31-0205 (/Users/junekim/Documents/verus-p11/source/state_machines_macros)
+    Finished `release` profile [optimized] target(s) in 6.69s
+[1;34mvargo info: [0m[34mbuilding vstd_build[0m
+   Compiling vstd_build v0.1.0 (/Users/junekim/Documents/verus-p11/source/vstd_build)
+    Finished `release` profile [optimized] target(s) in 0.26s
+[1;34mvargo info: [0m[34mbuilding verus[0m
+   Compiling libc v0.2.172
+   Compiling shlex v1.3.0
+   Compiling pkg-config v0.3.32
+   Compiling serde_core v1.0.228
+   Compiling subtle v2.6.1
+   Compiling serde v1.0.228
+   Compiling memchr v2.7.4
+   Compiling zstd-safe v5.0.2+zstd.1.5.2
+   Compiling regex-syntax v0.8.5
+   Compiling num-traits v0.2.19
+   Compiling adler2 v2.0.0
+   Compiling inout v0.1.4
+   Compiling powerfmt v0.2.0
+   Compiling digest v0.10.7
+   Compiling base64ct v1.8.0
+   Compiling deranged v0.4.0
+   Compiling cipher v0.4.4
+   Compiling miniz_oxide v0.8.8
+   Compiling crc32fast v1.4.2
+   Compiling aho-corasick v1.1.3
+   Compiling password-hash v0.4.2
+   Compiling hmac v0.12.1
+   Compiling sha2 v0.10.9
+   Compiling num-conv v0.1.0
+   Compiling serde_json v1.0.146
+   Compiling core-foundation-sys v0.8.7
+   Compiling winnow v0.5.40
+   Compiling time-core v0.1.4
+   Compiling jobserver v0.1.33
+   Compiling iana-time-zone v0.1.63
+   Compiling time v0.3.41
+   Compiling flate2 v1.1.2
+   Compiling cc v1.2.26
+   Compiling pbkdf2 v0.11.0
+   Compiling regex-automata v0.4.9
+   Compiling aes v0.8.4
+   Compiling sha1 v0.10.6
+   Compiling constant_time_eq v0.1.5
+   Compiling chrono v0.4.41
+   Compiling zstd-sys v2.0.15+zstd.1.5.7
+   Compiling bzip2-sys v0.1.13+1.0.8
+   Compiling regex v1.11.1
+   Compiling verus v0.1.0 (/Users/junekim/Documents/verus-p11/source/verus)
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling bzip2 v0.4.4
+   Compiling toml_edit v0.19.15
+   Compiling toml v0.7.8
+   Compiling zstd v0.11.2+zstd.1.5.2
+   Compiling zip v0.6.6
+    Finished `release` profile [optimized] target(s) in 5.43s
+[1;34mvargo info: [0m[34mbuilding cargo-verus[0m
+   Compiling serde_core v1.0.228
+   Compiling libc v0.2.172
+   Compiling serde v1.0.228
+   Compiling thiserror v2.0.17
+   Compiling serde_json v1.0.146
+   Compiling semver v1.0.26
+   Compiling camino v1.1.10
+   Compiling syn v2.0.101
+   Compiling anyhow v1.0.100
+   Compiling rustc_tools_util v0.3.0
+   Compiling once_cell v1.21.3
+   Compiling colored v3.0.0
+   Compiling cargo-verus v0.1.0 (/Users/junekim/Documents/verus-p11/source/cargo-verus)
+   Compiling serde_derive v1.0.228
+   Compiling thiserror-impl v2.0.17
+   Compiling clap_derive v4.5.49
+   Compiling clap v4.5.53
+   Compiling cargo-platform v0.3.2
+   Compiling errno v0.3.14
+   Compiling cpufeatures v0.2.17
+   Compiling getrandom v0.3.3
+   Compiling rustix v1.1.2
+   Compiling sha2 v0.10.9
+   Compiling tempfile v3.23.0
+   Compiling cargo_metadata v0.23.1
+   Compiling clap-cargo v0.18.3
+    Finished `release` profile [optimized] target(s) in 4.86s
+[1;34mvargo info: [0m[34mvstd outdated, rebuilding[0m
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running `target/release/vstd_build /Users/junekim/Documents/verus-p11/source/target-verus/release --release`
+verification results:: 1690 verified, 0 errors

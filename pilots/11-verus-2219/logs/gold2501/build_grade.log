@@ -1,0 +1,15 @@
+START 2026-06-14T07:30:51Z
+toolchain: channel = "1.95.0"
+build_exit=0
+bin_fp=a12508cc2ebf8415
+=== #2501 battery (1.95.0, gold) ===
+t1(bug,want REJECT)=REJECT
+t2(bug,want REJECT)=REJECT
+t3(sound-div,want VERIFY)=VERIFY
+ho5(sound-div,want VERIFY) === THE QUESTION ===> REJECT
+h2_assoc(bug,want REJECT)=REJECT
+h2_nested(bug,want REJECT)=REJECT
+p1(want VERIFY)=VERIFY
+seal_proofdiv(want VERIFY)=VERIFY
+END 2026-06-14T07:32:03Z
+DONE
