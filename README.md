@@ -137,7 +137,7 @@ Consequences:
 
 - Only merged PRs are eligible. Closed-unmerged PRs carry no attestation and drop out.
 - The grade is independent of the agent, because the merge is a human decision external to the harness. That independence is what makes the existence case survive a skeptic.
-- One caveat is inherited, not new: a narrow gold test can in principle reject a different correct fix (test-overfitting). This applies identically to every human-authored SWE-bench gold test and is mitigated the same way, by review.
+- One limit is inherited, not new: a narrow gold test can in principle reject a different correct fix (test-overfitting). This applies identically to every human-authored SWE-bench gold test and is mitigated the same way, by review.
 
 ### Win condition (existence case)
 
