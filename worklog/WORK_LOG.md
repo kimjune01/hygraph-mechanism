@@ -576,3 +576,13 @@ NUANCE: capability gradient on EFFICIENCY, not endpoint — Composer reached nea
 HARNESS confounds noted (lesson 14): codex=codex-CLI, Fable/Sonnet=claude-headless (clean within-harness pair), Composer=cursor-agent (only Composer driver). The clean within-harness comparison is Fable vs Sonnet (both near-A).
 GREMLINS (this box): clean_regrade.sh's `stat -f %m` hits GNU-coreutils stat (shadows BSD) and its case-check call lacks --calibration (default path /tmp/case-check/calibration.json absent) → corrupted provenance/casecheck fields. Bypassed via eval_full.sh (python3.13 + /usr/bin/stat + explicit --calibration). clean_regrade.sh needs the same portability fixes the committed gate already got.
 Patches: `patches/composer_gate2.patch`, `patches/sonnet_gate2_run2.patch` (+ run1 killtime). Logs: `logs/composer/`, `logs/sonnet/` (NOTES.md per arm).
+
+### 2026-06-13 — codex (gpt-5.5) adversarial re-analysis of the multi-model results. Overclaims retracted.
+Ran codex read-only on RESULTS/LESSONS/WORK_LOG + the forced-fresh grades (full verdict + disposition: `pilots/11-verus-2219/logs/codex-review-2026-06-13.md`). codex was right on the substance; the polished RESULTS/WORK_LOG had drifted to stronger claims than the per-arm NOTES (the "claims drift toward what the argument needs" failure). Retracted/edited:
+- "It is not recall" -> "capability OR fine-tune-recall; recall not excluded" (clean models show recall is not REQUIRED, not that Composer didn't memorize). Kept a separate, stronger anti-recall signal codex under-credited: gold #2501 is finer than any automated fix (it clears ho5; every automated arm misses ho5), so Composer landed on the gate-ATTRACTOR not the gold.
+- "three of four families" -> "three of four model+harness WORKFLOWS" (harness confound, scoped per lesson 14).
+- "efficiency, not endpoint" -> RETRACTED. Not protocol-symmetric: codex terminated @2.5h no rerun; Sonnet's matched 3h run did NOT clear, reached near-A only on run 2 with bigger budget + pass-snapshot + keepalive the others lacked. Selection bias. Missing control = protocol-matched codex rerun.
+- "same mechanism" -> "same behavioral carve-out / same failure surface" (Composer's impl path differs).
+- ATTRACTOR caveat added: gate calibrates p1/p2 not ho5, may funnel all models to one carve-out -> shared residual may be gate-shaping, not independent capability.
+- Fixed stale RESULTS sentence ("only Fable clears t3" -> Composer/Sonnet clear t3 too).
+OPEN CONTROLS (codex, not yet run): protocol-matched codex rerun (the big one); >=3 seeds/workflow; ho5-like preserve added to the gate; force-grade gold on ho5; date sourcing (added to NOTES).

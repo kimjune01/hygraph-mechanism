@@ -42,20 +42,24 @@ flowchart LR
 
 ---
 
-## Four families: the wall is not universal — and it isn't leakage
+## Four workflows: the wall is not universal, and recall is not required
 
-The corrected-gate arm, run on two more families (2026-06-13). Every verdict is a forced-fresh independent grade (calibrated case-check + `p1`/`p2` preserve + sealed held-outs the model never saw).
+The corrected-gate arm, run on two more **model+harness workflows** (2026-06-13). Every verdict is a forced-fresh independent grade (calibrated case-check + `p1`/`p2` preserve + sealed held-outs the model never saw). These are *workflows*, not pure weights — the harness varies by row, so read the claim as scoped to the workflow (LESSONS 14).
 
-| family | harness | contamination | impl wall (`p1`/`p2`) | sealed (`proofdiv`/`exec`) | `ho5` | outcome |
-|---|---|---|:--:|:--:|:--:|---|
-| codex `gpt-5.5` | codex-CLI | clean | ❌ oscillates 2.5h | — | — | 🔴 **C** (impl wall) |
-| Fable `claude-fable-5` | claude-headless | **clean** (Jan 2026) | ✅ / ✅ | V / V | ❌R | 🟢 near-A |
-| Composer 2.5 | cursor-agent | *not clean* (ships May 2026) | ✅ / ✅ | V / V | ❌R | 🟢 near-A |
-| Sonnet 4.6 | claude-headless | **clean** (Feb 2026 release) | ✅ / ✅ | V / V | ❌R | 🟢 near-A |
+| workflow | harness | contamination | impl wall (`p1`/`p2`) | sealed (`proofdiv`/`exec`) | `ho5` | stop rule | outcome |
+|---|---|---|:--:|:--:|:--:|---|---|
+| codex `gpt-5.5` | codex-CLI | clean | ❌ oscillates 2.5h | — | — | terminated @2.5h, no rerun | 🔴 **C** (impl wall) |
+| Fable `claude-fable-5` | claude-headless | **clean** (Jan 2026) | ✅ / ✅ | V / V | ❌R | natural | 🟢 near-A |
+| Composer 2.5 | cursor-agent | *not clean* (ships May 2026) | ✅ / ✅ | V / V | ❌R | natural @~1h | 🟢 near-A |
+| Sonnet 4.6 | claude-headless | **clean** (Feb 2026) | ✅ / ✅ | V / V | ❌R | **run 1 truncated @3h (did NOT clear); run 2 @4h + snapshot + keepalive** | 🟢 near-A (run 2) |
 
-Three of four families clear the wall to **near-A**, all with the *same* `requires_false`/declared-`!` carve-out and the *same* `ho5` residual. Only codex oscillated → its Outcome C is **model/harness-specific, not a universal wall**.
+Three of the four workflows clear the wall to **near-A**, with the *same behavioral carve-out* (clear `p1`/`p2`, miss `ho5`) — though Composer's *implementation* path differs (THIR-erasure `!`→`()` + `skip_remove`, vs Fable/Sonnet's `requires_false`/declared-`!` discriminator). Only codex oscillated. So Outcome C is **not a universal wall** across these workflows — **but the comparison is not protocol-symmetric** (see the caveat below).
 
-**On leakage.** Composer 2.5 cleared the wall but isn't contamination-clean (it shipped *after* the fix and Cursor attests no cutoff), so its pass could be capability *or* recall. It is not recall: **two contamination-clean models — Fable and Sonnet 4.6 — independently reach the identical fix-class and the identical single failure.** Once a clean model demonstrably reaches the predicate, leakage is no longer *needed* to explain a dirty model reaching it too. The clean+dirty convergence on one carve-out and one shared `ho5` miss is a property of the gate+task, not memorization. (Efficiency does differ: Composer ~1h; Sonnet needed a second fair run after a 3h truncation.)
+**On leakage (scoped).** Composer 2.5 cleared the wall but isn't contamination-clean (it shipped *after* the fix; Cursor attests no cutoff), so its pass is **capability OR fine-tune-recall — recall is not excluded.** What the clean arms establish is narrower: **recall is not *required* for this fix-class**, since two contamination-clean models (Fable, Sonnet 4.6) reach it. The positive anti-recall signal is separate and stronger: the human gold (`#2501`) is *finer* than what any automated arm produced — it clears `ho5`; Composer (and Fable, and Sonnet) miss `ho5`. A model that had memorized the gold would clear `ho5`. Composer landed on the **gate-rewarded attractor, not the gold**, which is evidence against recall of the gold specifically.
+
+**Caveat — convergence may be the gate, not the models.** The shared `ho5` miss is likely the gate *funneling* every successful model into one attractor (satisfy the calibrated `p1`/`p2`, miss the un-calibrated `ho5`), not three independent rediscoveries of the true predicate. So the convergence shows models can implement the gate-rewarded discriminator; it does **not** show independent arrival at the underlying fix. Testing attractor-vs-capability requires adding `ho5`-like preserve cases to the gate.
+
+**Caveat — fairness.** codex was terminated at ~2.5h with no rerun; Sonnet's first run (matched 3h budget) did *not* clear, and it reached near-A only on a second run with a larger budget, a pass-snapshot rule, and an appended operational keepalive the other arms lacked. So Sonnet's win is **"clears under a more forgiving rerun protocol," not "clears where codex walls under equal conditions."** A protocol-matched codex rerun (4h + keepalive) is the missing control before any "efficiency, not endpoint" reading is licensed.
 
 ---
 
@@ -96,7 +100,7 @@ Forced-fresh, identity-verified builds ([why that matters](LESSONS.md)). **Bug**
 | **Sonnet 4.6 + corrected gate** | R | R | R · R | ✅**V** | ❌R | `pass=true, 0 mis` | 🟢 **near-A** | [`sonnet_gate2_run2`](pilots/11-verus-2219/patches/sonnet_gate2_run2.patch) |
 | #2501 general (maintainer) | R | R | R · R | ✅V | (V) | `mishandles=0` | 🟢 general+correct | — |
 
-`✅`/`❌` mark where the divergence arm is cleared vs over-rejected. The whole study turns on the `t3`/`ho5` columns: every automated arm gets the bug columns; only Fable-with-calibration clears `t3`, and nothing automated clears `ho5`.
+`✅`/`❌` mark where the divergence arm is cleared vs over-rejected. The whole study turns on the `t3`/`ho5` columns: every automated arm gets the bug columns; the `t3` divergence arm is cleared only with the corrected gate (Fable, Composer 2.5, Sonnet 4.6 — never by the prompt/tool arms), and **nothing automated clears `ho5`** (only the human gold `#2501` does).
 
 Full provenance-stamped rows: [`clean_dataset.md`](pilots/11-verus-2219/clean_dataset.md) · [`.jsonl`](pilots/11-verus-2219/clean_dataset.jsonl).
 

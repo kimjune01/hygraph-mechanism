@@ -70,3 +70,10 @@ CONTAMINATION (load-bearing here; dates checked 2026-06-13):
   — verify its release/cutoff when grading that arm. Mechanism harness gremlins on this box (GNU-coreutils `stat -f`, missing default
 calibration) corrupted clean_regrade's provenance/casecheck fields — bypassed via eval_full.sh (python3.13 + /usr/bin/stat
 + explicit --calibration). clean_regrade.sh should get the same portability fixes for clean repro.
+
+## Date sources (added 2026-06-13 per codex review; sourcing the load-bearing cutoff claims)
+- Composer 2.5 base = Kimi K2.5: Cursor blog "Introducing Composer 2.5" (cursor.com/blog/composer-2-5) states base checkpoint; NO cutoff attested (also confirmed absent on cursor.com/docs/models/cursor-composer-2-5).
+- Composer 2.5 ship 2026-05-18: memeburn.com/cursor-composer-2-5-officially-launches/ ; techtimes.com (2026-05-20).
+- Kimi K2.5 released Jan 2026 (base pretraining cutoff ~Apr 2024, secondary-source only): codecademy.com/article/kimi-k-2-5-... ; github.com/MoonshotAI/Kimi-K2.5.
+- Sonnet 4.6: released 2026-02-17; training-data cutoff Jan 2026; reliable-knowledge cutoff Aug 2025 (secondary aggregation; cross-check against platform.claude.com/docs/en/about-claude/models/overview before publishing). ALL predate the verus fix (base 2026-03-08).
+NOTE: these are secondary sources. Before any Zenodo/publication, replace with primary attestations (vendor model cards) or archive snapshots.
