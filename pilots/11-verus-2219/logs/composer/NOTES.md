@@ -67,9 +67,10 @@ CONTAMINATION (load-bearing here; dates checked 2026-06-13):
   So there is no cutoff to support a cleanliness claim; the FT window runs through the 2026-05-18 ship date.
 - Verdict: Composer's pass = capability OR (less likely) fine-tune-recall. Sealed-VERIFY shows generalization, but a
   memorized mechanism generalizes too. Sonnet (claude-sonnet-4-6) is the cleaner arm IFF its cutoff predates the fix
-  — verify its release/cutoff when grading that arm. Mechanism harness gremlins on this box (GNU-coreutils `stat -f`, missing default
-calibration) corrupted clean_regrade's provenance/casecheck fields — bypassed via eval_full.sh (python3.13 + /usr/bin/stat
-+ explicit --calibration). clean_regrade.sh should get the same portability fixes for clean repro.
+  — verify its release/cutoff when grading that arm. Mechanism harness gremlins on this box, bypassed via eval_full.sh (single build, /usr/bin/stat, explicit --calibration).
+CORRECTION (2026-06-13): the empty-case-check I first hit was the STALE local/clean_regrade.sh (predates commit 49f1b74,
+lacks --calibration). The committed tools/clean_regrade.sh already had --calibration; its only residual bug was the
+stat order (BSD `stat -f` first poisons the GNU fallback on this box), fixed 2026-06-13 to try GNU `-c` first.
 
 ## Date sources (added 2026-06-13 per codex review; sourcing the load-bearing cutoff claims)
 - Composer 2.5 base = Kimi K2.5: Cursor blog "Introducing Composer 2.5" (cursor.com/blog/composer-2-5) states base checkpoint; NO cutoff attested (also confirmed absent on cursor.com/docs/models/cursor-composer-2-5).

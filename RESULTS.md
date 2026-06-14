@@ -40,6 +40,8 @@ flowchart LR
 
 → codex's wall is **implementation** (calibration doesn't remove it); Fable's was **calibration** (supply it and implementation follows). A genuine model-capability difference, isolated on the discriminator itself — not just the bug arm. Patches: [`gate2_codex_terminated`](pilots/11-verus-2219/patches/gate2_codex_terminated.patch) (C, [oscillation proof](worklog/WORK_LOG.md)) · [`fable_gate2`](pilots/11-verus-2219/patches/fable_gate2.patch) (near-A, [trace analysis](worklog/FABLE_WORKLOG.md)).
 
+> This two-model split was later extended to **four workflows** and a **protocol-matched codex rerun** — see [Four workflows](#four-workflows-the-wall-is-not-universal-and-recall-is-not-required) below. Net: three workflows reach near-A; codex does not clear in either protocol; the "implementation wall" character (oscillation) was partly budget-dependent, but the divergence wall itself held.
+
 ---
 
 ## Four workflows: the wall is not universal, and recall is not required
@@ -56,7 +58,7 @@ The corrected-gate arm, run on two more **model+harness workflows** (2026-06-13)
 
 Three of the four workflows clear the wall to **near-A**, with the *same behavioral carve-out* (clear `p1`/`p2`, miss `ho5`) — though Composer's *implementation* path differs (THIR-erasure `!`→`()` + `skip_remove`, vs Fable/Sonnet's `requires_false`/declared-`!` discriminator). codex does not clear in **either** protocol (the fairness control was run; see below). So the durable claim is the scoped one: *these three workflows clear; the codex-CLI workflow does not.*
 
-**On leakage (scoped).** Composer 2.5 cleared the wall but isn't contamination-clean (it shipped *after* the fix; Cursor attests no cutoff), so its pass is **capability OR fine-tune-recall — recall is not excluded.** What the clean arms establish is narrower: **recall is not *required* for this fix-class**, since two contamination-clean models (Fable, Sonnet 4.6) reach it. The positive anti-recall signal is separate and stronger: the human gold (`#2501`) is *finer* than what any automated arm produced — it clears `ho5`; Composer (and Fable, and Sonnet) miss `ho5`. A model that had memorized the gold would clear `ho5`. Composer landed on the **gate-rewarded attractor, not the gold**, which is evidence against recall of the gold specifically.
+**On leakage (scoped).** Composer 2.5 cleared the wall but isn't contamination-clean (it shipped *after* the fix; Cursor attests no cutoff), so its pass is **capability OR fine-tune-recall — recall is not excluded.** What the clean arms establish is narrower: **recall is not *required* for this fix-class**, since two contamination-clean models (Fable, Sonnet 4.6) reach it. The positive anti-recall signal is separate, and likely stronger *once verified*: the human gold (`#2501`) is *finer* than what any automated arm produced — it clears `ho5` (inferred, see † in the battery; not yet force-graded), while Composer (and Fable, and Sonnet) miss `ho5`. If gold-clears-`ho5` holds under a force-fresh grade, a model that had memorized the gold would clear `ho5` too; Composer landed on the **gate-rewarded attractor, not the gold**, which is evidence against recall of the gold specifically. (This argument is contingent on the `†` control; it is logged, not yet run.)
 
 **Caveat — convergence may be the gate, not the models.** The shared `ho5` miss is likely the gate *funneling* every successful model into one attractor (satisfy the calibrated `p1`/`p2`, miss the un-calibrated `ho5`), not three independent rediscoveries of the true predicate. So the convergence shows models can implement the gate-rewarded discriminator; it does **not** show independent arrival at the underlying fix. Testing attractor-vs-capability requires adding `ho5`-like preserve cases to the gate.
 
@@ -95,13 +97,16 @@ Forced-fresh, identity-verified builds ([why that matters](LESSONS.md)). **Bug**
 | codex prompts (best) | R | V | V · V | V | V | `changed≤114` | 🔴 narrow | [patches](pilots/11-verus-2219/patches/) |
 | Fable, model alone | R | R | R · R | ❌R | ❌R | `pass=true, 269` | 🟠 wide-but-broken | [`fable_arm`](pilots/11-verus-2219/patches/fable_arm.patch) |
 | codex + case-check | R | R | R · R | ❌R | ❌R | `pass=true, 269` | 🟠 wide-but-broken | [`casecheck_pilot`](pilots/11-verus-2219/patches/casecheck_pilot.patch) |
-| codex + corrected gate | — oscillates, never stable — | | | | | (C) | 🔴 impl wall | [`gate2_codex…`](pilots/11-verus-2219/patches/gate2_codex_terminated.patch) |
+| codex + corrected gate (orig, term @2.5h) | — oscillates, never stable — | | | | | (C) | 🔴 impl wall | [`gate2_codex…`](pilots/11-verus-2219/patches/gate2_codex_terminated.patch) |
+| codex + corrected gate (matched 4h) | R | R | R · R | ❌R | ❌R | `pass=false, crash=1250` | 🔴 no pass (p1 over-rej) | [`codex2_gate2_matched`](pilots/11-verus-2219/patches/codex2_gate2_matched.patch) |
 | **Fable + corrected gate** | R | R | R · R | ✅**V** | ❌R | `pass=true, 269` | 🟢 **near-A** | [`fable_gate2`](pilots/11-verus-2219/patches/fable_gate2.patch) |
 | **Composer 2.5 + corrected gate** | R | R | R · R | ✅**V** | ❌R | `pass=true, 0 mis` | 🟢 **near-A** | [`composer_gate2`](pilots/11-verus-2219/patches/composer_gate2.patch) |
 | **Sonnet 4.6 + corrected gate** | R | R | R · R | ✅**V** | ❌R | `pass=true, 0 mis` | 🟢 **near-A** | [`sonnet_gate2_run2`](pilots/11-verus-2219/patches/sonnet_gate2_run2.patch) |
-| #2501 general (maintainer) | R | R | R · R | ✅V | (V) | `mishandles=0` | 🟢 general+correct | — |
+| #2501 general (maintainer) | R | R | R · R | ✅V | (V)† | `mishandles=0` | 🟢 general+correct | — |
 
-`✅`/`❌` mark where the divergence arm is cleared vs over-rejected. The whole study turns on the `t3`/`ho5` columns: every automated arm gets the bug columns; the `t3` divergence arm is cleared only with the corrected gate (Fable, Composer 2.5, Sonnet 4.6 — never by the prompt/tool arms), and **nothing automated clears `ho5`** (only the human gold `#2501` does).
+`✅`/`❌` mark where the divergence arm is cleared vs over-rejected. The whole study turns on the `t3`/`ho5` columns: every automated arm gets the bug columns; the `t3` divergence arm is cleared only with the corrected gate (Fable, Composer 2.5, Sonnet 4.6 — never by the prompt/tool arms, and never by codex), and **nothing automated clears `ho5`**.
+
+† `#2501`-clears-`ho5` is **inferred, not forced-fresh graded** here: `#2501` is at a different toolchain (1.95.0 vs base 1.93.1), so it isn't co-gradeable with the arms above. The anti-recall argument in the four-workflow section leans on this; force-grading gold-on-`ho5` is a logged open control ([`logs/codex-review-2026-06-13.md`](pilots/11-verus-2219/logs/codex-review-2026-06-13.md)).
 
 Full provenance-stamped rows: [`clean_dataset.md`](pilots/11-verus-2219/clean_dataset.md) · [`.jsonl`](pilots/11-verus-2219/clean_dataset.jsonl).
 

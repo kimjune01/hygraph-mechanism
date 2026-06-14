@@ -39,7 +39,7 @@ for ART in "$@"; do
   start=$(date +%s)
   find source/rustc_mir_build/src source/rust_verify/src -name '*.rs' -exec touch {} + 2>/dev/null
   ( cd "$WT/source" && vargo build --release ) >/tmp/cr-build.log 2>&1; bexit=$?
-  bmtime=$(stat -f %m "$DRIVER" 2>/dev/null || stat -c %Y "$DRIVER" 2>/dev/null || echo 0); rebuilt=$([ "$bmtime" -ge "$start" ] && echo true || echo false)
+  bmtime=$(stat -c %Y "$DRIVER" 2>/dev/null || stat -f %m "$DRIVER" 2>/dev/null || echo 0); rebuilt=$([ "$bmtime" -ge "$start" ] && echo true || echo false)   # GNU (-c) first: on macOS+homebrew-coreutils, BSD-syntax `stat -f %m` prints fs-info to stdout AND exits nonzero, poisoning the fallback
   binfp=$(shasum -a 256 "$DRIVER" 2>/dev/null | cut -c1-16)   # content fingerprint = true identity
   if [ $bexit -ne 0 ]; then
     printf '{"artifact":"%s","patch_sha":"%s","patch_lines":%s,"toolchain":"%s","applied":"%s","build_exit":%s,"rebuilt":%s,"bin_fp":"%s","battery":null,"casecheck":null}\n' \
