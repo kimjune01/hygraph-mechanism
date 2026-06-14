@@ -43,7 +43,7 @@ search and catches the soundness hole, but cannot manufacture the diagnostic jud
 strong models supply. That is a more defensible claim than "graph always wins": the
 treatment helps monotonically, and how much depends on the generator.
 
-## Caveats
+## Limits
 - n=1 instance; 3 model families x 2 arms. Decisive on THIS bug, not a population rate.
 - Harness confound across models (codex CLI vs Claude subagent vs cursor-agent). Within-model
   min-vs-graph is clean; cross-model absolute behavior is not.

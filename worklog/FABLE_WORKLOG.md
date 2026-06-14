@@ -112,7 +112,7 @@ STANDING PICTURE (all prompt-controlled where it matters):
 - The divergence arm is the wall for ALL of them (model-invariant, prompt-invariant, tool-invariant);
   only the human #2501 clears it.
 
-Honest caveats: (1) model+harness confound remains (codex-CLI vs claude-headless; cannot run Fable in
+Honest limits: (1) model+harness confound remains (codex-CLI vs claude-headless; cannot run Fable in
 codex-CLI). (2) n=1 per cell. (3) "lift" = narrow -> wide-but-broken, NOT narrow -> correct; Fable's
 wide is still broken on divergence. (4) the wide-but-broken vs narrow boundary is the only model
 difference observed; on the divergence arm the models are tied (both fail).
@@ -171,7 +171,7 @@ case-check coverage-blind-spot finding: a gate lifts the model precisely as far 
 and the model generalizes within the calibrated shape but not beyond it. Calibration unblocks
 implementation; coverage bounds the unblocking.
 
-Caveats: n=1; model+harness (claude-headless) not codex-CLI; the corrected gate was required (committed
+Limits: n=1; model+harness (claude-headless) not codex-CLI; the corrected gate was required (committed
 gate had a python/calibration bug). The codex gate2 arm (other machine) is the same-prompt comparator;
 when it lands, compare: did codex also break the p1 wall, or stall (implementation wall, the original C)?
 

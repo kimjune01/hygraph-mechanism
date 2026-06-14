@@ -6,7 +6,7 @@ bottleneck is **localization** (symptom far from cause, fix in a file the error 
 NOT implementation difficulty. Selection criterion: reproducible + deterministic oracle +
 single-repo fix + the reporter does NOT localize it.
 
-Caveat held in view: this is a narrow, model-specific, perishable band; even a win here refines
+Limit held in view: this is a narrow, model-specific, perishable band; even a win here refines
 "narrow conditional value," it does not resurrect "super effective." "Go harder" is only honest
 if bounded by a prediction (name where region-2 should be; an empty result there counts against).
 

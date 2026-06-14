@@ -20,7 +20,7 @@
 
 - `LESSONS.md:39` | `#2501-clears-ho5 is inferred ... force-grading ... open control` | `{inferred, cross-toolchain}` | `{flagged}` | Fix: good.
 
-- `pilots/11-verus-2219/RESULT-corrected.md:9` | `The finer human gold #2501 clears ho5; no automated arm does, evidence each landed on the gate-attractor, not the gold.` | `{inferred, cross-toolchain}` | `{asserted-as-fact}` | Fix: add the same † caveat from `RESULTS.md`; make the anti-recall conclusion conditional.
+- `pilots/11-verus-2219/RESULT-corrected.md:9` | `The finer human gold #2501 clears ho5; no automated arm does, evidence each landed on the gate-attractor, not the gold.` | `{inferred, cross-toolchain}` | `{asserted-as-fact}` | Fix: add the same † note from `RESULTS.md`; make the anti-recall conclusion conditional.
 
 - `pilots/11-verus-2219/RESULT-corrected.md:15-22` | table gives `#2501` measured-looking `R/R/R/V` but `ho5` is `—` | `{cross-toolchain}` | `{partly asserted-as-fact}` | Fix: label the `#2501` column “1.95.0 / cross-toolchain” and keep `ho5` ungraded.
 
@@ -36,7 +36,7 @@
 
 - `RESULTS.md:49`, `worklog/WORK_LOG.md:561` | `sealed held-outs the model never saw` | `{self-reported/protocol-assumed}` | `{asserted-as-fact}` | Fix: cite the prompt/run isolation artifact, or phrase as “sealed by protocol.”
 
-- `RESULTS.md:54-57`, `RESULTS.md:65`, `LESSONS.md:19`, `worklog/WORK_LOG.md:595` | `near-A`, `crash=1250`, `efficiency not endpoint retired`, `n=1/workflow` | `{measured, n=1}` | `{flagged}` | Fix: acceptable; the n=1 and protocol caveats are carried.
+- `RESULTS.md:54-57`, `RESULTS.md:65`, `LESSONS.md:19`, `worklog/WORK_LOG.md:595` | `near-A`, `crash=1250`, `efficiency not endpoint retired`, `n=1/workflow` | `{measured, n=1}` | `{flagged}` | Fix: acceptable; the n=1 and protocol limits are carried.
 
 - `RESULTS.md:56`, `LESSONS.md:33`, `worklog/WORK_LOG.md:570-571` | contamination dates/cutoffs such as `Composer ... ships May 2026`, `Sonnet ... Jan 2026 cutoff / Feb-2026 release` | `{self-reported}` | `{asserted-as-fact}` | Fix: add source links or say “per Cursor/Anthropic docs as logged.”
 

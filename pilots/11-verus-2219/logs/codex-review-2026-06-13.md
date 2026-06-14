@@ -18,7 +18,7 @@ DISPOSITION: ACCEPTED. RESULTS + LESSONS 7 now state the asymmetry explicitly an
 
 ## What does not follow (codex): convergence may be the gate, not the models.
 Gate calibrates p1/p2 but not ho5 → may funnel every model to one attractor (satisfy p1/p2, miss ho5). So shared carve-out + shared ho5 residual is possibly gate-shaping, not independent rediscovery; this WEAKENS the convergence-as-capability reading.
-DISPOSITION: ACCEPTED as a caveat in both RESULTS and LESSONS. PARTIAL PUSHBACK: the attractor framing also strengthens the anti-recall point — the gold is finer than the attractor (clears ho5), so Composer's ho5 miss is positive evidence it did not recall the gold.
+DISPOSITION: ACCEPTED as a limit in both RESULTS and LESSONS. PARTIAL PUSHBACK: the attractor framing also strengthens the anti-recall point — the gold is finer than the attractor (clears ho5), so Composer's ho5 miss is positive evidence it did not recall the gold.
 
 ## Factual error (codex): RESULTS said "only Fable-with-calibration clears t3" — stale; Composer + Sonnet also clear t3.
 DISPOSITION: FIXED.

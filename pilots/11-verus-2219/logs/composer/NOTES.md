@@ -22,7 +22,7 @@ a capability *probe* (does it clear the implementation/calibration wall), report
 with the confound stated, not a clean head-to-head ranking. Pilot 09 already drove
 Composer-2.5 via cursor-agent, so this is consistent tooling for the Composer family.
 
-## NEW caveat — contamination (cutoff)
+## NEW limit — contamination (cutoff)
 The graph-generator cleanliness argument (README) pins the *generator* to a
 pre-cutoff model. Here Composer 2.5 is the **craft/solver** model. The fixes
 (#2230 2026-03, #2501) may predate Composer 2.5's training cutoff (a current 2026
