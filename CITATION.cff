@@ -1,7 +1,9 @@
 cff-version: 1.2.0
-title: "The Hypothesis Graph Is Load-Bearing"
+title: "The Hypothesis Graph Is Load-Bearing: a mechanism case study"
 message: "If you use this artifact, please cite it. (DOI added on the Zenodo release.)"
 type: dataset
+version: "1.0.0"
+date-released: "2026-06-14"
 authors:
   - family-names: Kim
     given-names: June
@@ -10,13 +12,27 @@ authors:
 repository-code: "https://github.com/kimjune01/hygraph-mechanism"
 url: "https://github.com/kimjune01/hygraph-mechanism"
 license: CC-BY-SA-4.0
+keywords:
+  - hypothesis graph
+  - methodeutics
+  - abductive inference
+  - LLM program repair
+  - external oracle
+  - counterexample-guided refinement
+  - machine epistemics
+  - provenance
+  - reproducibility
+  - post-cutoff evaluation
 abstract: >-
-  A mechanism case study on whether LLMs generalize a bug fix to a represented
-  predicate or merely tabulate the reported case. On a verifier soundness bug
-  whose correct fix is an XOR-shaped predicate, it isolates where prompt-encoded
-  methods, an execution-gated evaluation tool, and cross-model capability each
-  do or do not lift the fix, and shows that enumeration is inducible by the model
-  while calibration (external ground truth) is not. Includes the forced-fresh
-  grading harness, the case arms (codex and Fable), the full reasoning trail, and
-  reproduction instructions.
+  Artifact backing the paper "The Hypothesis Graph: Semantic Memory Written by
+  Methodeutics". A mechanism case study on whether an LLM generalizes a bug fix
+  to a represented predicate or merely tabulates the reported case. On a Verus
+  verifier soundness bug (#2219, post-cutoff) whose correct fix is an XOR-shaped
+  predicate, it isolates where prompt-encoded methods, an execution-gated
+  evaluation tool, and cross-model capability each do or do not lift the fix, and
+  shows that enumeration is inducible by the model while the calibration oracle
+  (external ground truth) is not. Includes the forced-fresh identity-verified
+  grading harness, the case arms (codex, Fable, Sonnet 4.6, Composer 2.5), the
+  out-of-grammar held-outs, the full reasoning trail, and reproduction
+  instructions. An existence proof of a mechanism, not a resolve-rate claim.
 # doi: 10.5281/zenodo.XXXXXXX   # fill in after the Zenodo release is minted

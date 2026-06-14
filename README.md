@@ -30,6 +30,40 @@ The narrative below is the conceptual spine: why the standard benchmark can't me
 
 ---
 
+## How to cite
+
+This repository is archived on Zenodo with a DOI (minted on release). It is the artifact backing the paper [*The Hypothesis Graph: Semantic Memory Written by Methodeutics*](https://june.kim/the-hypothesis-graph-semantic-memory-methodeutics). Cite the DOI for the mechanism evidence; cite the paper for the argument.
+
+> Kim, June (2026). *The Hypothesis Graph Is Load-Bearing: a mechanism case study* (Version 1.0.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.XXXXXXX
+
+The machine-readable record is in [`CITATION.cff`](CITATION.cff); Zenodo metadata in [`.zenodo.json`](.zenodo.json). To point at a single artifact, cite the DOI followed by the repo-relative path from the index below (e.g. `…/pilots/11-verus-2219/MECHANISM-dissection.md`).
+
+## Artifact index
+
+Every claim the paper rests on this repo for maps to a committed artifact. Paths are stable; cite them against the DOI.
+
+| Backs (in the paper) | Artifact |
+|---|---|
+| The Verus #2219 lift, dissected end to end | [`pilots/11-verus-2219/MECHANISM-dissection.md`](pilots/11-verus-2219/MECHANISM-dissection.md), [`RESULT-corrected.md`](pilots/11-verus-2219/RESULT-corrected.md) |
+| The ablation grid (narrow / wide-but-broken / general) | [`pilots/11-verus-2219/RESULT-corrected.md`](pilots/11-verus-2219/RESULT-corrected.md), [`results/`](pilots/11-verus-2219/results/) |
+| The tiny bench and its two goldens (construction + human-approved) | [`pilots/11-verus-2219/MANIFEST.md`](pilots/11-verus-2219/MANIFEST.md), [`gate2/`](pilots/11-verus-2219/gate2/) |
+| Forced-fresh, identity-verified dataset (21 artifacts, rebuild-confirmed) | [`pilots/11-verus-2219/clean_dataset.jsonl`](pilots/11-verus-2219/clean_dataset.jsonl) ([rendered](pilots/11-verus-2219/clean_dataset.md)) |
+| The climb trace (per-arm session logs) | [`pilots/11-verus-2219/logs/`](pilots/11-verus-2219/logs/) |
+| Out-of-grammar held-outs (assoc-type projection, nested generic) and the divergence guards | [`pilots/11-verus-2219/heldout2/`](pilots/11-verus-2219/heldout2/), [`heldout/`](pilots/11-verus-2219/heldout/) |
+| The externalized gate (enumerate / calibrate / gate) | [`pilots/11-verus-2219/tools/case-check.py`](pilots/11-verus-2219/tools/case-check.py) + [`calibration.json`](pilots/11-verus-2219/tools/calibration.json); generalized tool → [abductor](https://github.com/kimjune01/abductor) |
+| The corrected gate (base + approved-fix golden) | [`pilots/11-verus-2219/gate2/`](pilots/11-verus-2219/gate2/) |
+| Recall probe (model does not recover the post-cutoff fix) | [`BOOTSTRAP-instance-probe.md`](BOOTSTRAP-instance-probe.md), [`pilots/11-verus-2219/RESULT-corrected.md`](pilots/11-verus-2219/RESULT-corrected.md) |
+| Cross-workflow arms (codex, Fable, Sonnet 4.6, Composer 2.5) | [`pilots/11-verus-2219/patches/`](pilots/11-verus-2219/patches/), [`logs/`](pilots/11-verus-2219/logs/), [`worklog/FABLE_WORKLOG.md`](worklog/FABLE_WORKLOG.md) |
+| Preregistration (one sentence per loop) | [`METHODOLOGY-preregistration.md`](METHODOLOGY-preregistration.md) |
+| The localization-hard candidate band | [`CANDIDATES-localization-hard.md`](CANDIDATES-localization-hard.md) |
+| flux #1613 auditability trail (19-node, frozen) | [`pilots/08-flux-1613/`](pilots/08-flux-1613/) at tag `flux-1613-trail-v1` |
+| Verus #2427 boundary case (oracle in place, did not engage) | [`pilots/10-verus-2427/`](pilots/10-verus-2427/) |
+| The null-regime pilots (minimal baseline kept succeeding) | [`pilots/03-qrtool/`](pilots/03-qrtool/), [`04-slang-server/`](pilots/04-slang-server/), [`05-fjall-287/`](pilots/05-fjall-287/), [`06-bat-3710/`](pilots/06-bat-3710/) |
+| Findings and methodological lessons | [`RESULTS.md`](RESULTS.md), [`LESSONS.md`](LESSONS.md) |
+| Reproduction (and the traps that void a result) | [`REPRODUCE.md`](REPRODUCE.md), [`pilots/11-verus-2219/REPRODUCE.md`](pilots/11-verus-2219/REPRODUCE.md) |
+
+---
+
 ## Why this exists: the wrong bench
 
 The prior work ([`swebench-pro`](https://github.com/kimjune01/swebench-pro), the
