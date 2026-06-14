@@ -1,0 +1,249 @@
+diff --git a/source/rust_verify/src/erase.rs b/source/rust_verify/src/erase.rs
+index 112f24aa3..08c334385 100644
+--- a/source/rust_verify/src/erase.rs
++++ b/source/rust_verify/src/erase.rs
+@@ -3,7 +3,7 @@ use vir::messages::AstId;
+ use rustc_hir::HirId;
+ use rustc_span::SpanData;
+ 
+-use vir::ast::{Datatype, Dt, Fun, Function, Krate, Mode, Path, Pattern};
++use vir::ast::{Datatype, Dt, Fun, Function, Krate, Mode, Path, Pattern, TypDecoration, TypX};
+ use vir::modes::ErasureModes;
+ 
+ use crate::verus_items::{DummyCaptureItem, VerusItem, VerusItems};
+@@ -143,6 +143,34 @@ fn resolved_call_to_call_erase(
+                 CallErasure::Call(NodeErase::Erase)
+             } else if f.x.mode == Mode::Spec {
+                 CallErasure::Call(NodeErase::Erase)
++            } else if *in_ghost && f.x.mode == Mode::Proof {
++                // A proof fn whose only tracked (proof-mode) params/return are of the
++                // uninhabited Never (!) type has no real linearity side effects when
++                // called from a ghost context: Never values can never exist at runtime,
++                // so there is no tracked resource that the borrow checker needs to see
++                // consumed.  Erasing such calls prevents ghost uses of the Never type
++                // from making subsequent code unreachable to the borrow checker, which
++                // would otherwise allow linear (tracked) resources to be used multiple
++                // times (issue #2219).
++                // A type is "linear" (carries borrow-check linearity) if it is
++                // neither Never (!) nor unit (): unit is always Copy/trivial, and
++                // Never cannot exist at runtime.  Note that proof fns with no
++                // explicit return type get ret.mode == function mode (Proof) but
++                // ret.typ == unit, which must also be treated as non-linear.
++                let is_trivial_typ = |typ: &vir::ast::Typ| {
++                    matches!(**(typ), TypX::Decorate(TypDecoration::Never, _, _))
++                        || matches!(**(typ), TypX::Datatype(Dt::Tuple(0), _, _))
++                };
++                let has_linear_tracked_param = f.x.params.iter().any(|p| {
++                    p.x.mode == Mode::Proof && !is_trivial_typ(&p.x.typ)
++                });
++                let has_linear_tracked_ret =
++                    f.x.ret.x.mode == Mode::Proof && !is_trivial_typ(&f.x.ret.x.typ);
++                if !has_linear_tracked_param && !has_linear_tracked_ret {
++                    CallErasure::Call(NodeErase::Erase)
++                } else {
++                    CallErasure::Call(NodeErase::Keep)
++                }
+             } else {
+                 CallErasure::Call(NodeErase::Keep)
+             }
+diff --git a/source/rustc_mir_build/src/thir/cx/block.rs b/source/rustc_mir_build/src/thir/cx/block.rs
+index f831a6879..aba3069be 100644
+--- a/source/rustc_mir_build/src/thir/cx/block.rs
++++ b/source/rustc_mir_build/src/thir/cx/block.rs
+@@ -52,16 +52,23 @@ impl<'tcx> ThirBuildCx<'tcx> {
+                 let hir_id = stmt.hir_id;
+                 let thir_stmt = match stmt.kind {
+                     hir::StmtKind::Expr(expr) | hir::StmtKind::Semi(expr) => {
+-                        let stmt = Stmt {
+-                            kind: StmtKind::Expr {
+-                                scope: region::Scope {
+-                                    local_id: hir_id.local_id,
+-                                    data: region::ScopeData::Node,
++                        let expr_id = self.mirror_expr(expr);
++                        // Drop ghost ! expression statements: they make subsequent code
++                        // unreachable to the borrow checker (issue #2219).
++                        if crate::verus_expr::is_ghost_never_expr_stmt(self, expr_id) {
++                            None
++                        } else {
++                            let stmt = Stmt {
++                                kind: StmtKind::Expr {
++                                    scope: region::Scope {
++                                        local_id: hir_id.local_id,
++                                        data: region::ScopeData::Node,
++                                    },
++                                    expr: expr_id,
+                                 },
+-                                expr: self.mirror_expr(expr),
+-                            },
+-                        };
+-                        Some(self.thir.stmts.push(stmt))
++                            };
++                            Some(self.thir.stmts.push(stmt))
++                        }
+                     }
+                     hir::StmtKind::Item(..) => {
+                         // ignore for purposes of the MIR
+@@ -104,21 +111,32 @@ impl<'tcx> ThirBuildCx<'tcx> {
+                             Some(init) => local.span.with_hi(init.span.hi()),
+                             None => local.span,
+                         };
+-                        let stmt = Stmt {
+-                            kind: StmtKind::Let {
+-                                remainder_scope,
+-                                init_scope: region::Scope {
+-                                    local_id: hir_id.local_id,
+-                                    data: region::ScopeData::Node,
++                        let initializer = local.init.map(|init| self.mirror_expr(init));
++                        // Drop ghost ! let statements: the Never-typed initializer would make
++                        // subsequent code unreachable to the borrow checker (issue #2219).
++                        if crate::verus_expr::is_ghost_never_let_stmt(
++                            self,
++                            &pattern,
++                            &initializer,
++                        ) {
++                            None
++                        } else {
++                            let stmt = Stmt {
++                                kind: StmtKind::Let {
++                                    remainder_scope,
++                                    init_scope: region::Scope {
++                                        local_id: hir_id.local_id,
++                                        data: region::ScopeData::Node,
++                                    },
++                                    pattern,
++                                    initializer,
++                                    else_block,
++                                    lint_level: LintLevel::Explicit(local.hir_id),
++                                    span,
+                                 },
+-                                pattern,
+-                                initializer: local.init.map(|init| self.mirror_expr(init)),
+-                                else_block,
+-                                lint_level: LintLevel::Explicit(local.hir_id),
+-                                span,
+-                            },
+-                        };
+-                        Some(self.thir.stmts.push(stmt))
++                            };
++                            Some(self.thir.stmts.push(stmt))
++                        }
+                     }
+                 };
+ 
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c48453..4397b3661 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -550,7 +550,7 @@ pub(crate) fn erased_ghost_value<'tcx>(
+     expr_id_from_kind(cx, kind, hir_id, span, ty)
+ }
+ 
+-fn erased_ghost_value_kind<'tcx>(
++pub(crate) fn erased_ghost_value_kind<'tcx>(
+     cx: &mut ThirBuildCx<'tcx>,
+     erasure_ctxt: &VerusErasureCtxt,
+     hir_id: HirId,
+diff --git a/source/rustc_mir_build_additional_files/verus_expr.rs b/source/rustc_mir_build_additional_files/verus_expr.rs
+index 9a591644e..8c90e6550 100644
+--- a/source/rustc_mir_build_additional_files/verus_expr.rs
++++ b/source/rustc_mir_build_additional_files/verus_expr.rs
+@@ -1,10 +1,11 @@
+ use crate::thir::cx::ThirBuildCx;
+ use crate::verus::CallErasure;
+ use crate::verus::{
+-    erase_node, erase_node_unadjusted, erase_tree_kind, erased_ghost_value, handle_call,
+-    is_node_with_single_arg_erased,
++    erase_node, erase_node_unadjusted, erase_tree_kind, erased_ghost_value, erased_ghost_value_kind,
++    handle_call, is_erased, is_node_with_single_arg_erased, VerusErasureCtxt,
+ };
+ use rustc_hir::{Expr, ExprKind, UnOp};
++use rustc_middle::thir::{ExprId, Pat};
+ use rustc_middle::ty::adjustment::{Adjust, Adjustment, AutoBorrow};
+ 
+ pub(crate) fn mirror_expr_adjusted_pre<'tcx>(
+@@ -39,6 +40,21 @@ pub(crate) fn apply_adjustment_post<'tcx>(
+     };
+ 
+     let kind = match adjustment.kind {
++        Adjust::NeverToAny => {
++            // When an erased ghost value of type `!` undergoes a NeverToAny coercion,
++            // replace the entire NeverToAny with an erased ghost value of the target type.
++            // This prevents the `!` type from propagating into kept calls (e.g., `f(erased_!)`)
++            // and making the borrow checker treat subsequent code as unreachable (issue #2219).
++            if let rustc_middle::thir::ExprKind::NeverToAny { source } = &kind {
++                if is_erased(cx, &erasure_ctxt, &cx.thir.exprs[*source].kind) {
++                    erased_ghost_value_kind(cx, &erasure_ctxt, expr.hir_id, expr.span, adjustment.target)
++                } else {
++                    kind
++                }
++            } else {
++                kind
++            }
++        }
+         Adjust::Deref(None | Some(_)) | Adjust::Borrow(AutoBorrow::Ref(_)) => {
+             // Adjust::Deref(None) -> implicit *
+             // Adjust::Borrow(AutoBorrow::Ref(_)) -> implicit &
+@@ -109,3 +125,63 @@ pub(crate) fn mirror_expr_post<'tcx>(
+     let ty = cx.typeck_results.expr_ty(expr);
+     crate::verus_time_travel_prevention::expr_post(cx, expr, ty, kind)
+ }
++
++/// Recursively check whether `expr_id` is a ghost/erased expression of type Never (!).
++/// Used to decide whether to drop such statements from proof fn bodies (issue #2219).
++fn is_ghost_never_inner<'tcx>(
++    cx: &ThirBuildCx<'tcx>,
++    erasure_ctxt: &VerusErasureCtxt,
++    expr_id: ExprId,
++) -> bool {
++    use rustc_middle::thir::ExprKind as EK;
++    let expr = &cx.thir.exprs[expr_id];
++    if !expr.ty.is_never() {
++        return false;
++    }
++    match &expr.kind {
++        EK::Scope { value, .. } => is_ghost_never_inner(cx, erasure_ctxt, *value),
++        EK::Call { .. } => is_erased(cx, erasure_ctxt, &expr.kind),
++        EK::Match { arms, .. } => arms.iter().all(|arm_id| {
++            let arm = &cx.thir.arms[*arm_id];
++            is_ghost_never_inner(cx, erasure_ctxt, arm.body)
++        }),
++        EK::Block { block } => {
++            let block = &cx.thir.blocks[*block];
++            if let Some(final_expr) = block.expr {
++                is_ghost_never_inner(cx, erasure_ctxt, final_expr)
++            } else {
++                false
++            }
++        }
++        _ => false,
++    }
++}
++
++/// Returns true if a standalone expression statement should be dropped because
++/// it is a ghost/erased expression of Never type that would cause the borrow
++/// checker to treat subsequent code as unreachable (issue #2219).
++pub(crate) fn is_ghost_never_expr_stmt<'tcx>(cx: &ThirBuildCx<'tcx>, expr_id: ExprId) -> bool {
++    let Some(erasure_ctxt) = cx.verus_ctxt.ctxt.as_deref() else {
++        return false;
++    };
++    is_ghost_never_inner(cx, erasure_ctxt, expr_id)
++}
++
++/// Returns true if a let statement should be dropped because both the pattern type
++/// and the initializer are ghost/erased Never-type expressions (issue #2219).
++pub(crate) fn is_ghost_never_let_stmt<'tcx>(
++    cx: &ThirBuildCx<'tcx>,
++    pattern: &Pat<'tcx>,
++    initializer: &Option<ExprId>,
++) -> bool {
++    let Some(init_id) = initializer else {
++        return false;
++    };
++    if !pattern.ty.is_never() || !cx.thir.exprs[*init_id].ty.is_never() {
++        return false;
++    }
++    let Some(erasure_ctxt) = cx.verus_ctxt.ctxt.as_deref() else {
++        return false;
++    };
++    is_ghost_never_inner(cx, erasure_ctxt, *init_id)
++}

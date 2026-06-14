@@ -1,0 +1,233 @@
+diff --git a/source/rust_verify/src/fn_call_to_vir.rs b/source/rust_verify/src/fn_call_to_vir.rs
+index 6eab2f8d9..a398a6c6a 100644
+--- a/source/rust_verify/src/fn_call_to_vir.rs
++++ b/source/rust_verify/src/fn_call_to_vir.rs
+@@ -2163,7 +2163,7 @@ fn extract_ensures<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, is_proof: false, requires_false: false },
+             );
+ 
+             let typs: Vec<Typ> = closure_param_typs(bctx, expr)?;
+@@ -2205,7 +2205,7 @@ fn extract_quant<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, is_proof: false, requires_false: false },
+             );
+ 
+             let body = tcx.hir_body(closure.body);
+@@ -2267,7 +2267,7 @@ fn extract_assert_forall_by<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, is_proof: false, requires_false: false },
+             );
+ 
+             let body = tcx.hir_body(closure.body);
+@@ -2327,7 +2327,7 @@ fn extract_choose<'tcx>(
+         ExprKind::Closure(closure) => {
+             bctx.ctxt.push_body_erasure(
+                 closure.def_id,
+-                BodyErasure { erase_body: true, ret_spec: true },
++                BodyErasure { erase_body: true, ret_spec: true, is_proof: false, requires_false: false },
+             );
+ 
+             let closure_body = tcx.hir_body(closure.body);
+diff --git a/source/rust_verify/src/rust_to_vir_expr.rs b/source/rust_verify/src/rust_to_vir_expr.rs
+index 819bbb040..7a066f2cd 100644
+--- a/source/rust_verify/src/rust_to_vir_expr.rs
++++ b/source/rust_verify/src/rust_to_vir_expr.rs
+@@ -3811,7 +3811,10 @@ pub(crate) fn closure_to_vir<'tcx>(
+         assert!(ensure.1.len() == 0);
+ 
+         let exprx = if is_spec_fn {
+-            bctx.ctxt.push_body_erasure(*def_id, BodyErasure { erase_body: true, ret_spec: true });
++            bctx.ctxt.push_body_erasure(
++                *def_id,
++                BodyErasure { erase_body: true, ret_spec: true, is_proof: false, requires_false: false },
++            );
+ 
+             if require.len() > 0 || ensure.0.len() > 0 {
+                 return err_span(
+@@ -3829,6 +3832,8 @@ pub(crate) fn closure_to_vir<'tcx>(
+                         None => false,
+                         Some((_, ret_mode)) => ret_mode == Mode::Spec,
+                     },
++                    is_proof: proof_fn_modes.is_some(),
++                    requires_false: false,
+                 },
+             );
+ 
+diff --git a/source/rust_verify/src/rust_to_vir_func.rs b/source/rust_verify/src/rust_to_vir_func.rs
+index e66357425..83113ddf1 100644
+--- a/source/rust_verify/src/rust_to_vir_func.rs
++++ b/source/rust_verify/src/rust_to_vir_func.rs
+@@ -28,9 +28,9 @@ use rustc_span::symbol::Ident;
+ use std::collections::{HashMap, HashSet};
+ use std::sync::Arc;
+ use vir::ast::{
+-    BodyVisibility, Fun, FunX, FunctionAttrsX, FunctionKind, FunctionX, GenericBoundX, ItemKind,
+-    KrateX, Mode, OpaqueTypes, Opaqueness, ParamX, Path, Typ, TypDecoration, TypX, VarIdent,
+-    VirErr, Visibility,
++    BodyVisibility, Constant, ExprX, Fun, FunX, FunctionAttrsX, FunctionKind, FunctionX,
++    GenericBoundX, ItemKind, KrateX, Mode, OpaqueTypes, Opaqueness, ParamX, Path, Typ,
++    TypDecoration, TypX, VarIdent, VirErr, Visibility,
+ };
+ use vir::ast_util::{air_unique_var, unit_typ};
+ use vir::def::{RETURN_VALUE, VERUS_SPEC};
+@@ -1831,7 +1831,7 @@ pub(crate) fn check_item_fn<'tcx>(
+         ret_span,
+         ParamX {
+             name: ret_name,
+-            typ: ret_typ,
++            typ: ret_typ.clone(),
+             mode: ret_mode,
+             is_mut: false,
+             user_mut: false,
+@@ -1986,9 +1986,18 @@ pub(crate) fn check_item_fn<'tcx>(
+     let body_visibility =
+         sig.override_body_visibility(publish, visibility.clone(), body_visibility);
+ 
++    let req = if mode == Mode::Spec { &recommend } else { &*header.require };
++    let requires_false =
++        (req.len() == 1 && matches!(&req[0].x, ExprX::Const(Constant::Bool(false))))
++        || matches!(*ret_typ, TypX::Decorate(TypDecoration::Never, _, _));
+     ctxt.push_body_erasure(
+         id.expect_local(),
+-        BodyErasure { erase_body: mode == Mode::Spec, ret_spec: ret_mode == Mode::Spec },
++        BodyErasure {
++            erase_body: mode == Mode::Spec,
++            ret_spec: ret_mode == Mode::Spec,
++            is_proof: mode == Mode::Proof,
++            requires_false,
++        },
+     );
+ 
+     let mut func = FunctionX {
+@@ -2725,7 +2734,12 @@ pub(crate) fn check_item_const_or_static<'tcx>(
+ 
+     ctxt.push_body_erasure(
+         id.expect_local(),
+-        BodyErasure { erase_body: body_mode == Mode::Spec, ret_spec: ret_mode == Mode::Spec },
++        BodyErasure {
++            erase_body: body_mode == Mode::Spec,
++            ret_spec: ret_mode == Mode::Spec,
++            is_proof: func_mode == Mode::Proof,
++            requires_false: false,
++        },
+     );
+ 
+     let mut functionx = FunctionX {
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86ad..3e8bf1d9c 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -843,9 +843,39 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+     fn lint_and_remove_uninhabited(&mut self) {
+         let mut lints = vec![];
+ 
++        // (Note from verus) In the verus ghost-keep compilation pass, proof/ghost code is
++        // kept for borrow-checking purposes while spec code is erased to `erased_ghost_value`
++        // placeholders. A call that returns an uninhabited type (e.g. `!`) in a PROOF function
++        // body is a GHOST return — it does not represent real Rust-level divergence. Removing
++        // the return edge would make subsequent MIR blocks unreachable to the borrow-checker,
++        // allowing double-consumption of `tracked` (affine/linear) resources to slip through
++        // undetected — a soundness bug (issue #2219).
++        //
++        // Fix: when the current function is a verus proof function AND the callee is either:
++        //   (a) erased_ghost_value (a ghost erasure placeholder), OR
++        //   (b) a locally-defined proof function (not from an external crate),
++        // suppress `*target = None`. This keeps the return edge visible so the borrow-checker
++        // enforces linearity on tracked resources after the call.
++        //
++        // We do NOT suppress for calls to external proof fns like `proof_from_false`
++        // (which requires false — its callers are logically unreachable, making the
++        // post-call code genuinely unreachable in any sound proof).
++        //
++        // Exec functions are NOT affected: real Rust divergence (panic!, etc.) still removes
++        // return edges for exec fn bodies, preserving existing borrow-check behaviour.
++        let ctxt_opt = crate::verus::get_verus_erasure_ctxt_option();
++        let in_verus_proof_fn = ctxt_opt
++            .as_ref()
++            .and_then(|ctxt| ctxt.bodies.get(&self.def_id).copied())
++            .is_some_and(|b| b.is_proof);
++        let erased_ghost_value_def_id = self.tcx.get_diagnostic_item(
++            Symbol::intern("verus::verus_builtin::erased_ghost_value"),
++        );
++
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref mut target, destination, ref func, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+@@ -890,11 +920,32 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                     lints.push((target_bb, ty, term.source_info.span));
+                 }
+ 
+-                // The presence or absence of a return edge affects control-flow sensitive
+-                // MIR checks and ultimately whether code is accepted or not. We can only
+-                // omit the return edge if a return type is visibly uninhabited to a module
+-                // that makes the call.
+-                *target = None;
++                // (Note from verus) In a proof fn body, suppress removing the return edge
++                // when the callee is a ghost erasure artifact (erased_ghost_value) OR a
++                // locally-defined proof function. External proof fns from vstd (like
++                // proof_from_false which requires false) legitimately cause unreachability
++                // and should still have the return edge removed.
++                let suppress_remove = in_verus_proof_fn && {
++                    let callee_ty = func.ty(&self.local_decls, self.tcx);
++                    if let ty::TyKind::FnDef(callee_def_id, _) = callee_ty.kind() {
++                        let is_erased_ghost =
++                            erased_ghost_value_def_id == Some(*callee_def_id);
++                        let is_local_proof_fn_without_req_false =
++                            callee_def_id.as_local().is_some_and(|local_id| {
++                                ctxt_opt
++                                    .as_ref()
++                                    .and_then(|c| c.bodies.get(&local_id).copied())
++                                    .is_some_and(|b| b.is_proof && !b.requires_false)
++                            });
++                        is_erased_ghost || is_local_proof_fn_without_req_false
++                    } else {
++                        false
++                    }
++                };
++
++                if !suppress_remove {
++                    *target = None;
++                }
+             }
+         }
+ 
+diff --git a/source/rustc_mir_build_additional_files/verus.rs b/source/rustc_mir_build_additional_files/verus.rs
+index 135c48453..6ae400785 100644
+--- a/source/rustc_mir_build_additional_files/verus.rs
++++ b/source/rustc_mir_build_additional_files/verus.rs
+@@ -68,6 +68,11 @@ pub enum CallErasure {
+ pub struct BodyErasure {
+     pub erase_body: bool,
+     pub ret_spec: bool,
++    pub is_proof: bool,
++    /// True when the function has `requires false` — code after a call to it is
++    /// logically unreachable in any sound proof, so the borrow-checker should
++    /// treat the call as diverging (i.e., keep `*target = None`).
++    pub requires_false: bool,
+ }
+ 
+ /// Global context with all information across the krate.
+@@ -129,7 +134,7 @@ fn get_verus_erasure_ctxt() -> Arc<VerusErasureCtxt> {
+         .clone()
+ }
+ 
+-fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
++pub(crate) fn get_verus_erasure_ctxt_option() -> Option<Arc<VerusErasureCtxt>> {
+     VERUS_ERASURE_CTXT.read().unwrap().clone()
+ }
+ 

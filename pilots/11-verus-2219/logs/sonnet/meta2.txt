@@ -1,0 +1,12 @@
+START 2026-06-13T23:24:40Z
+model=sonnet cwd=/Users/junekim/Documents/verus-p11 prompt=gate2_arm.txt harness=claude-headless budget=4h re-run
+END 2026-06-14T01:22:12Z rc=0
+PASS snapshots captured:
+-rw-r--r-- 1 junekim wheel 11241 Jun 13 18:22 /tmp/p11g2-scratch/PASS-0.patch
+killtime diffstat:
+ source/rust_verify/src/fn_call_to_vir.rs         |  8 +--
+ source/rust_verify/src/rust_to_vir_expr.rs       |  7 ++-
+ source/rust_verify/src/rust_to_vir_func.rs       | 26 +++++++---
+ source/rustc_mir_build/src/builder/mod.rs        | 63 +++++++++++++++++++++---
+ source/rustc_mir_build_additional_files/verus.rs |  7 ++-
+ 5 files changed, 93 insertions(+), 18 deletions(-)

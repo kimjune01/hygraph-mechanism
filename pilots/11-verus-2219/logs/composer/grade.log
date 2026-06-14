@@ -1,0 +1,10 @@
+[13:14:52] === artifact: patches/composer_gate2.patch ===
+./local/clean_regrade.sh: line 42: [:   File: "/Users/junekim/Documents/verus-p11/source/target-verus/release/rust_verify"
+    ID: 10000110000001a Namelen: ?       Type: apfs
+Block size: 4096       Fundamental block size: 4096
+Blocks: Total: 120699413  Free: 17536021   Available: 17536021
+Inodes: Total: 706719521  Free: 701440840
+0: integer expression expected
+[13:15:15] patches/composer_gate2.patch: T=REJECT/REJECT/VERIFY h2=REJECT/REJECT ho5=REJECT cc:pass= chg=
+[13:15:15] ALL DONE -> /tmp/composer-grade.jsonl
+GRADE_EXIT=0

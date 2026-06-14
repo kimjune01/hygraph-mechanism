@@ -12,6 +12,8 @@ Soundness bug whose correct fix is an XOR-shaped predicate. See `REPRODUCE.md` t
   - tool arm: `casecheck_pilot.patch`
   - corrected-gate codex arm: `gate2_codex_terminated.patch` (outcome C, oscillation)
   - Fable: `fable_sv_draw1_{partial,final}` (self_verifier), `fable_arm` (weak prompt), `fable_ctrl` (codex-exact controlled)
-- `logs/` — per-arm session logs (`abduction/`, `sv/`, `v3/`, `graph_scratch/`).
+  - corrected-gate Composer 2.5 arm: `composer_gate2.patch` (near-A; cursor-agent)
+  - corrected-gate Sonnet 4.6 arm: `sonnet_gate2_run2.patch` (near-A, the verified PASS-0 snapshot; `sonnet_gate2.patch` = run-1 truncated killtime)
+- `logs/` — per-arm session logs (`abduction/`, `sv/`, `v3/`, `graph_scratch/`, `composer/`, `sonnet/` — each with NOTES.md + eval output + stream).
 - `results/` — `RESULTS_*tally.txt` grade tallies.
 - `clean_dataset.{jsonl,md}` — the 21-artifact fixed-toolchain dataset (provenance-stamped).

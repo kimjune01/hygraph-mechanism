@@ -1,0 +1,9 @@
+START 2026-06-13T20:19:33Z
+model=sonnet cwd=/Users/junekim/Documents/verus-p11 prompt=gate2_arm.txt harness=claude-headless
+END 2026-06-13T23:19:33Z rc=124
+diffstat:
+ source/rust_verify/src/erase.rs                    | 30 +++++++-
+ source/rustc_mir_build/src/thir/cx/block.rs        | 64 ++++++++++-------
+ source/rustc_mir_build_additional_files/verus.rs   |  2 +-
+ .../rustc_mir_build_additional_files/verus_expr.rs | 80 +++++++++++++++++++++-
+ 4 files changed, 149 insertions(+), 27 deletions(-)

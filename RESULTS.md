@@ -42,6 +42,23 @@ flowchart LR
 
 ---
 
+## Four families: the wall is not universal — and it isn't leakage
+
+The corrected-gate arm, run on two more families (2026-06-13). Every verdict is a forced-fresh independent grade (calibrated case-check + `p1`/`p2` preserve + sealed held-outs the model never saw).
+
+| family | harness | contamination | impl wall (`p1`/`p2`) | sealed (`proofdiv`/`exec`) | `ho5` | outcome |
+|---|---|---|:--:|:--:|:--:|---|
+| codex `gpt-5.5` | codex-CLI | clean | ❌ oscillates 2.5h | — | — | 🔴 **C** (impl wall) |
+| Fable `claude-fable-5` | claude-headless | **clean** (Jan 2026) | ✅ / ✅ | V / V | ❌R | 🟢 near-A |
+| Composer 2.5 | cursor-agent | *not clean* (ships May 2026) | ✅ / ✅ | V / V | ❌R | 🟢 near-A |
+| Sonnet 4.6 | claude-headless | **clean** (Feb 2026 release) | ✅ / ✅ | V / V | ❌R | 🟢 near-A |
+
+Three of four families clear the wall to **near-A**, all with the *same* `requires_false`/declared-`!` carve-out and the *same* `ho5` residual. Only codex oscillated → its Outcome C is **model/harness-specific, not a universal wall**.
+
+**On leakage.** Composer 2.5 cleared the wall but isn't contamination-clean (it shipped *after* the fix and Cursor attests no cutoff), so its pass could be capability *or* recall. It is not recall: **two contamination-clean models — Fable and Sonnet 4.6 — independently reach the identical fix-class and the identical single failure.** Once a clean model demonstrably reaches the predicate, leakage is no longer *needed* to explain a dirty model reaching it too. The clean+dirty convergence on one carve-out and one shared `ho5` miss is a property of the gate+task, not memorization. (Efficiency does differ: Composer ~1h; Sonnet needed a second fair run after a 3h truncation.)
+
+---
+
 ## The thesis in one diagram
 
 ```mermaid
@@ -75,6 +92,8 @@ Forced-fresh, identity-verified builds ([why that matters](LESSONS.md)). **Bug**
 | codex + case-check | R | R | R · R | ❌R | ❌R | `pass=true, 269` | 🟠 wide-but-broken | [`casecheck_pilot`](pilots/11-verus-2219/patches/casecheck_pilot.patch) |
 | codex + corrected gate | — oscillates, never stable — | | | | | (C) | 🔴 impl wall | [`gate2_codex…`](pilots/11-verus-2219/patches/gate2_codex_terminated.patch) |
 | **Fable + corrected gate** | R | R | R · R | ✅**V** | ❌R | `pass=true, 269` | 🟢 **near-A** | [`fable_gate2`](pilots/11-verus-2219/patches/fable_gate2.patch) |
+| **Composer 2.5 + corrected gate** | R | R | R · R | ✅**V** | ❌R | `pass=true, 0 mis` | 🟢 **near-A** | [`composer_gate2`](pilots/11-verus-2219/patches/composer_gate2.patch) |
+| **Sonnet 4.6 + corrected gate** | R | R | R · R | ✅**V** | ❌R | `pass=true, 0 mis` | 🟢 **near-A** | [`sonnet_gate2_run2`](pilots/11-verus-2219/patches/sonnet_gate2_run2.patch) |
 | #2501 general (maintainer) | R | R | R · R | ✅V | (V) | `mishandles=0` | 🟢 general+correct | — |
 
 `✅`/`❌` mark where the divergence arm is cleared vs over-rejected. The whole study turns on the `t3`/`ho5` columns: every automated arm gets the bug columns; only Fable-with-calibration clears `t3`, and nothing automated clears `ho5`.

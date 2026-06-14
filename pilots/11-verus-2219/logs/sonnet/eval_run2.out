@@ -1,0 +1,22 @@
+rebuilt=true bin_fp=da338d68a0768826
+=== CALIBRATED CASE-CHECK (gate's bug+preserve arms) ===
+crash=0
+pass=true
+mishandles=0
+valid-bug-still-accepted=0
+valid-preserve-rejected=0
+=== BATTERY ===
+t1(bug,want REJECT)=REJECT
+t2(bug,want REJECT)=REJECT
+t3(sound-div,want VERIFY)=VERIFY
+h2_assoc(heldout bug,want REJECT)=REJECT
+h2_nested(heldout bug,want REJECT)=REJECT
+ho5(sound-div,want VERIFY)=REJECT
+=== PRESERVE (gate p1/p2, want VERIFY = the implementation wall codex failed) ===
+p1(want VERIFY)=VERIFY
+p2(want VERIFY)=VERIFY
+=== SEALED HELD-OUTS (model never saw; Fable VERIFIED both = generalized) ===
+seal_proofdiv(want VERIFY)=VERIFY
+seal_exec(want VERIFY)=VERIFY
+DONE
+EXIT=0

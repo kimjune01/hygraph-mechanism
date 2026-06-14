@@ -1,0 +1,12 @@
+START 2026-06-13T19:14:07Z
+model=composer-2.5 cwd=/Users/junekim/Documents/verus-p11 prompt=gate2_arm.txt
+END 2026-06-13T20:14:26Z rc=0
+diffstat:
+ source/rust_verify/src/erase.rs                    | 118 +++++++++++++++-
+ source/rust_verify/src/fn_call_to_vir.rs           |  10 +-
+ source/rustc_mir_build/src/builder/expr/into.rs    |   6 +-
+ source/rustc_mir_build/src/builder/mod.rs          |  28 +++-
+ source/rustc_mir_build/src/thir/cx/expr.rs         |   5 +
+ source/rustc_mir_build_additional_files/verus.rs   | 154 +++++++++++++++++++--
+ .../rustc_mir_build_additional_files/verus_expr.rs |  29 +++-
+ 7 files changed, 328 insertions(+), 22 deletions(-)
