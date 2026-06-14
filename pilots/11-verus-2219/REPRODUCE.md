@@ -71,7 +71,21 @@ The harness does a forced-fresh rebuild (the vendored `rustc_mir_build` crate do
 - NARROW: changed<269.
 - Also grade the sealed divergence held-outs in `gate2/sealed/` (the model never saw them).
 
+## Grading #2501 (the human general fix) at its own toolchain — cross-toolchain
+
+`#2501` (commit `455695049`) is built at **1.95.0**, not the base `1.93.1`. The base grading harness pins a custom `/tmp/rustup-shims` to 1.93.1, which mis-builds #2501's 1.95.0 source (105 rustc-internal errors). To grade it, **drop the custom shims and let rustup's proxies honor #2501's `rust-toolchain.toml`**. The reference script is [`logs/gold2501/build_grade.sh`](logs/gold2501/build_grade.sh); the recipe:
+```
+git -C "$VERUS_WT" checkout --detach 455695049            # #2501; brings rust-toolchain.toml=1.95.0
+# build WITHOUT /tmp/rustup-shims on PATH; include ~/.cargo/bin (rustup proxies) so rustc resolves to 1.95.0:
+( cd source && env -u RUSTC -u RUSTUP_TOOLCHAIN \
+    PATH="$VERUS_WT/tools/vargo/target/release:$HOME/.cargo/bin:/usr/bin:/bin" \
+    vargo build --release )
+# grade each probe with the SAME clean PATH (not the 1.93.1 shims)
+git -C "$VERUS_WT" checkout --detach 23dc6e75             # restore base when done
+```
+Result on the dev box (`logs/gold2501/build_grade.log`, `bin_fp=a12508cc`): t1/t2 REJECT, t3 VERIFY, h2×2 REJECT, **ho5 REJECT**, p1/seal_proofdiv VERIFY — identical 8-probe battery to the near-A fixes. **Caveat:** this is cross-toolchain, so only the 8-probe battery is comparable; #2501's full 269-case `case-check` is *not* co-gradeable against the 1.93.1 calibration. `ho5`'s ideal label is VERIFY, but every fix (incl. #2501) over-rejects it by design — it is out of the maintainer's bar and not scored (see `RESULTS.md`).
+
 ## Gotchas
 - Vendored-crate staleness: always force-fresh (the harness does; manual builds must `touch source/rustc_mir_build/src/**`).
-- Toolchain pinning: the fixes #2230/#2501 are at different toolchains (1.93.1 / 1.95.0); grade only same-toolchain artifacts together.
+- Toolchain pinning: the fixes #2230/#2501 are at different toolchains (1.93.1 / 1.95.0); grade only same-toolchain artifacts together (see the #2501 cross-toolchain recipe above for the one exception, and its caveat).
 - The box gets CPU-saturated: one arm at a time per machine; verus rebuild loops thrash if doubled up.
