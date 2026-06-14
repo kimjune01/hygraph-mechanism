@@ -9,7 +9,7 @@ A soundness bug whose correct fix is an XOR-shaped predicate. Everything to repr
 - **Step-by-step runbook:** [`pilots/11-verus-2219/REPRODUCE.md`](pilots/11-verus-2219/REPRODUCE.md) — build verus at base `23dc6e75`, recalibrate the gate to your binary, run an arm, grade.
 - **The gate:** `tools/case-check.py` (+ `calibration.json`) — the fixpoint-closed type-former enumeration; `gate2/` is the corrected gate (case-check + a human-approved divergence golden from `#2501`).
 - **The grading harness:** `tools/clean_regrade.sh` + `tools/render_dataset.py` — forced-fresh, identity-verified builds (defeats the stale-binary trap, lesson 9) over a sealed battery + held-outs.
-- **The arms:** all patches in `patches/` (prompt-method `*_draw*`, the `case-check` tool arm `casecheck_pilot`, the corrected-gate codex arm `gate2_codex_terminated`, the Fable arms `fable_*`); per-arm session logs in `logs/`; grade tallies in `results/`. See `pilots/11-verus-2219/MANIFEST.md` for the full map.
+- **The arms:** all patches in `patches/` (prompt-method `*_draw*`, the `case-check` tool arm `casecheck_pilot`, the Fable arms `fable_*`, and the **corrected-gate (gate2) arms across four model+harness workflows**: codex `gate2_codex_terminated` + `codex2_gate2_matched` (codex-CLI), `fable_gate2`, `composer_gate2` (cursor-agent), `sonnet_gate2_run2` (claude-headless)); per-arm session logs in `logs/` (incl. `composer/`, `sonnet/`, `codex2/`, each with a `run.sh` launcher + `NOTES.md`); grade tallies in `results/`. See `pilots/11-verus-2219/MANIFEST.md` for the full map and `RESULTS.md` for the four-workflow result.
 - **The clean dataset:** `clean_dataset.jsonl` / `clean_dataset.md` — 21 artifacts at fixed toolchain, every row provenance-stamped.
 - **Findings writeups:** `RESULT-corrected.md`, `MECHANISM-dissection.md`, and `worklog/FABLE_WORKLOG.md`.
 
@@ -21,7 +21,8 @@ These are the traps that produced false headlines mid-study (see `LESSONS.md`):
 2. **Recalibrate the gate to your own base binary** — `calibration.json` is build-specific.
 3. **Grade only same-toolchain artifacts together** — base/#2230 are 1.93.1, #2501 is 1.95.0.
 4. **Grade on held-outs *outside* the gate** (`oracle/`, `heldout2/`, `gate2/sealed/`) — passing the gate is tabulation-complete; the held-outs catch it.
-5. **Read traces, not just patches** — the patch is a projection; the cause (coverage vs implementation vs calibration) is only in the trace's *actions*, cross-checked against the maintainer fix.
+5. **Read traces, not just patches** — the patch is a projection; the cause (coverage vs implementation vs calibration) is only in the trace's *actions*, cross-checked against the maintainer fix. This applies to the operator's own grading too: in the 2026-06-13 multi-model runs, both a model's stream "GATE pass=true" (it was the prompt text echoed in `ps` output) and a case-check `valid-preserve-rejected=0` summary (failures were bucketed as `crash`) gave false reads that the per-probe battery + gate-log files corrected.
+6. **Watch the harness on non-dev boxes.** `clean_regrade.sh` here used `stat -f %m` (BSD) and a no-`--calibration` case-check call; on a box with GNU coreutils on PATH (`stat` shadowed) and no `/tmp/case-check/calibration.json`, both silently corrupt the provenance/case-check fields. The 2026-06-13 runs bypassed this with `logs/composer/eval_full.sh` (pins `python3.13`, `/usr/bin/stat`, explicit `--calibration`); `clean_regrade.sh` needs the same fixes the committed `gate2/gate.sh` already got.
 
 ## Other pilots
 

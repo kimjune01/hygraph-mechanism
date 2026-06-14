@@ -48,6 +48,15 @@ Keepalive matters: verus rebuilds are slow and silent; the Claude Code Agent wat
 
 For a clean run, pull any answer-bearing notes out of the agent's reachable memory/CLAUDE.md first (the dev box temporarily removed a memory file that named the fix mechanism). The fixes (#2230, #2501) post-date Fable's Jan-2026 cutoff, so the model can't have memorized them, but local notes can leak.
 
+### 5b. The gate2 corrected-gate arm, across four model+harness workflows
+The corrected gate (`gate2/gate.sh`, which adds the `p1`/`p2` divergence goldens) was run on four workflows with the shared prompt `prompts/gate2_arm.txt`. Each launcher is committed under `logs/<arm>/run.sh` and is the exact command used:
+- **codex** (`gpt-5.5`, codex-CLI): original `gate2_codex_terminated.patch`; protocol-matched rerun `logs/codex2/run.sh` (4h + pass-snapshot + keepalive). Outcome: no pass in either (`crash`/oscillation on `p1`).
+- **Fable** (`model: fable`, claude-headless): `fable_gate2.patch`. near-A.
+- **Composer 2.5** (cursor-agent, `logs/composer/run.sh`): `composer_gate2.patch`. near-A.
+- **Sonnet 4.6** (claude-headless, `logs/sonnet/run2.sh`): `sonnet_gate2_run2.patch` (the verified PASS-0 snapshot). near-A.
+
+Grade these with the portable single-build evaluator `logs/composer/eval_full.sh <abs-path-to.patch>` (it pins `python3.13` + `/usr/bin/stat` + explicit `--calibration`, and probes battery + `p1`/`p2` + `gate2/sealed/` in one rebuild). **Contamination differs per model** — Fable and Sonnet 4.6 predate the fix (clean); Composer 2.5 ships 2026-05-18 with no attested cutoff (recall not excluded). See `logs/composer/NOTES.md` (date sources) and `RESULTS.md` for the four-workflow result.
+
 ## 6. Grade
 After the agent leaves its patch in `$VERUS_WT`:
 ```

@@ -2,6 +2,14 @@
 
 *Status: exploratory, n=1. This supersedes two earlier headlines ("tabulated", then "general-with-gap") that were **stale-binary artifacts** — the vendored `rustc_mir_build` crate does not rebuild on plain incremental `vargo build`, so the pilot harness graded a partial binary on the held-out step. All numbers below are from **forced-fresh, identity-verified** rebuilds (touch sources → rebuild; VDBG instrumentation confirms binary identity).*
 
+> **Update (2026-06-13) — the predicted perturbation was run, then extended to four workflows.** The "highest-leverage next perturbation" below (close case-check's preserve blind spot by adding a divergence-preserve golden) became the **gate2 corrected gate** (`gate2/` adds `p1`/`p2`, human-approved divergence goldens). Result, graded forced-fresh and cross-checked against the goldens:
+> - **Mode-gate mechanism confirmed across families.** Three model+harness workflows reach **near-A** with the *same behavioral carve-out* (keep the CFG edge for ghost/proof calls, prune only genuine divergence): Fable (clean), Composer 2.5 (dirty), Sonnet 4.6 (clean). Composer's *implementation* differs (THIR-erasure `!`→`()`), but the behavior is the same carve-out. This corroborates point 2 (mode gate, not the inhabitedness query) on three independent fixes.
+> - **The XOR's second arm is now partly cleared, but coverage-bounded.** Given the `p1` divergence golden, the near-A fixes carve out the *calibrated* divergence shape (declared-`!`/`requires_false`) and verify the sealed twins — but all three still over-reject the *un-calibrated* `ho5` (generic-instantiation `mk::<!>()`). So outcome (a) below holds within the gate's coverage; the gate lifts the model exactly as far as it calibrates.
+> - **codex still walls — fairness-controlled.** codex (codex-CLI) does not pass under either the original 2.5h run *or* a protocol-matched 4h rerun (pass-snapshot + keepalive). It fails the divergence golden `p1` in both; the matched run reaches `mishandles=0` on the bug arm but over-rejects `p1` as `crash=1250`. So the failure *mode* was budget-dependent (oscillation → crash) but the divergence wall is robust.
+> - **Contamination (scoped).** Recall is *not required* for this fix-class (two clean models reach it); it is *not excluded* for Composer (ships 2026-05-18, no attested cutoff). The finer human gold `#2501` clears `ho5`; no automated arm does, evidence each landed on the gate-attractor, not the gold.
+>
+> Full result + adversarial (codex) review + corrections: [`../../RESULTS.md`](../../RESULTS.md) (four-workflow table), [`../../LESSONS.md`](../../LESSONS.md) (7, 13), [`logs/codex-review-2026-06-13.md`](logs/codex-review-2026-06-13.md), and the [`WORK_LOG`](../../worklog/WORK_LOG.md) entries dated 2026-06-13. Per-arm runs: [`logs/composer/`](logs/composer/), [`logs/sonnet/`](logs/sonnet/), [`logs/codex2/`](logs/codex2/).
+
 ## The trustworthy table (forced-fresh base + patched builds)
 
 | probe | base | model fix | #2501 | #2230 | correct | note |
@@ -24,12 +32,12 @@ case-check on the forced-fresh patched binary: `pass=true, changed=269 exactly, 
 ## XOR adjudication (your framing)
 The target is a "fancy XOR": `{rustc-uninhabited & ghost-erased ⇒ keep edge}` vs `{genuine runtime divergence ⇒ prune edge}`. The model **solved the first arm in full generality** (the uninhabited/ghost side, via the mode gate — *not* the inhabitedness query; see the correction above) but **failed the second** — it keeps the edge for runtime-real divergence too, collapsing that arm to an OR. So the XOR is **half-solved**: general on the inhabitedness side, over-conservative on the divergence side — and **the tool's gate never even tested the second arm.** This refines "the model can't do reliable XOR": with the prosthesis it got one arm completely; the other arm it missed, and the gate didn't demand it.
 
-## Highest-leverage next perturbation (supersedes the 6-draw rate prereg)
+## Highest-leverage next perturbation (supersedes the 6-draw rate prereg) — ✅ RUN (gate2), result mixed by family
 **Close case-check's preserve blind spot** — add the runtime-real-divergence-preserve shape to the grammar — and re-run the loop. This tests the *mechanism*, not just a rate:
 - **(a)** The model now carves out divergence → solves the full XOR with the prosthesis → strong positive ("the gate, once complete, induces the full predicate").
 - **(b)** The model thrashes / can't satisfy both arms (oscillatory trajectory) → the divergence-discrimination is beyond reach even with the gate → the XOR-incapacity is real and localized to that one arm.
 
-Either outcome is publishable, and it's cheaper and more diagnostic than 6 blind draws.
+**Outcome (2026-06-13):** both happened, split by workflow. With the `p1` divergence golden added (gate2), **Fable / Composer 2.5 / Sonnet 4.6 hit (a)** — they carve out divergence and pass the gate (near-A), *bounded by the gate's coverage* (they clear the calibrated declared-`!` shape + sealed twins, miss the un-calibrated `ho5`). **codex hits (b)** — no pass under either the original or a protocol-matched 4h rerun; it over-rejects `p1` (oscillation originally, `crash=1250` in the rerun). So "the gate, once more complete, induces the carve-out" is true for three workflows and false for the codex-CLI workflow. A *further* perturbation — adding an `ho5`-like generic-instantiation golden — remains the open test of whether the carve-out is gate-shaped (attractor) or genuine capability (see [`logs/codex-review-2026-06-13.md`](logs/codex-review-2026-06-13.md)).
 
 ## Still-open validity threats (Fable's gate — unchanged, gate any publication)
 1. **Hint-leak control C1** — static labeled cases, no execution loop, one shot. Tells whether the *loop* or the *labeled corpus* did the work.
