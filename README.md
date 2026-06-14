@@ -1,5 +1,7 @@
 # The Hypothesis Graph Is Load-Bearing
 
+[![DOI](https://zenodo.org/badge/1264985202.svg)](https://doi.org/10.5281/zenodo.20691973)
+
 *A mechanism case study, not a performance paper: the evidence, the harness, and the full reasoning trail.*
 
 Claim: a harness-level data structure, the typed hypothesis graph, makes bugfixes succeed that the same model cannot reach without it, on real GitHub issues whose fixes are certifiably outside the model's training and where no gold specification is handed over. This is an existence proof plus the mechanism that generates the structure. It is not a resolve-rate claim.
@@ -34,9 +36,9 @@ The sweep-deployment reconstruction, from "The next phase" onward, is planned: a
 
 ## How to cite
 
-This repository is archived on Zenodo with a DOI (minted on release). It is the artifact backing the paper [*The Hypothesis Graph: Semantic Memory Written by Methodeutics*](https://june.kim/the-hypothesis-graph-semantic-memory-methodeutics). Cite the DOI for the mechanism evidence; cite the paper for the argument.
+This repository is archived on Zenodo: [10.5281/zenodo.20691973](https://doi.org/10.5281/zenodo.20691973) (concept DOI, always the latest version). It is the artifact backing the paper [*The Hypothesis Graph: Semantic Memory Written by Methodeutics*](https://june.kim/the-hypothesis-graph-semantic-memory-methodeutics). Cite the DOI for the mechanism evidence; cite the paper for the argument.
 
-> Kim, June (2026). *The Hypothesis Graph Is Load-Bearing: a mechanism case study* (Version 1.0.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.XXXXXXX
+> Kim, June (2026). *The Hypothesis Graph Is Load-Bearing: a mechanism case study* (Version 1.0.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.20691974
 
 The machine-readable record is in [`CITATION.cff`](CITATION.cff); Zenodo metadata in [`.zenodo.json`](.zenodo.json). To point at a single artifact, cite the DOI followed by the repo-relative path from the index below (e.g. `…/pilots/11-verus-2219/MECHANISM-dissection.md`).
 
