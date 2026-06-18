@@ -1,9 +1,9 @@
 cff-version: 1.2.0
-title: "The Hypothesis Graph Is Load-Bearing: a mechanism case study"
+title: "The Hypothesis Graph: a mechanism case study"
 message: "If you use this artifact, please cite it. (DOI added on the Zenodo release.)"
 type: dataset
-version: "1.0.0"
-date-released: "2026-06-14"
+version: "1.1.0"
+date-released: "2026-06-18"
 authors:
   - family-names: Kim
     given-names: June
@@ -35,4 +35,4 @@ abstract: >-
   grading harness, the case arms (codex, Fable, Sonnet 4.6, Composer 2.5), the
   out-of-grammar held-outs, the full reasoning trail, and reproduction
   instructions. An existence proof of a mechanism, not a resolve-rate claim.
-doi: 10.5281/zenodo.20691973   # concept DOI (all versions); v1.0.0 = 10.5281/zenodo.20691974
+doi: 10.5281/zenodo.20691973   # concept DOI (all versions); v1.0.0 = 10.5281/zenodo.20691974, v1.1.0 minted on release

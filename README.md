@@ -1,4 +1,4 @@
-# The Hypothesis Graph Is Load-Bearing
+# The Hypothesis Graph
 
 [![DOI](https://zenodo.org/badge/1264985202.svg)](https://doi.org/10.5281/zenodo.20691973)
 
@@ -38,7 +38,7 @@ The sweep-deployment reconstruction, from "The next phase" onward, is planned: a
 
 This repository is archived on Zenodo: [10.5281/zenodo.20691973](https://doi.org/10.5281/zenodo.20691973) (concept DOI, always the latest version). It is the artifact backing the paper [*The Hypothesis Graph: Semantic Memory Written by Methodeutics*](https://june.kim/the-hypothesis-graph-semantic-memory-methodeutics). Cite the DOI for the mechanism evidence; cite the paper for the argument.
 
-> Kim, June (2026). *The Hypothesis Graph Is Load-Bearing: a mechanism case study* (Version 1.0.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.20691974
+> Kim, June (2026). *The Hypothesis Graph: a mechanism case study* (Version 1.1.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.20691973
 
 The machine-readable record is in [`CITATION.cff`](CITATION.cff); Zenodo metadata in [`.zenodo.json`](.zenodo.json). To point at a single artifact, cite the DOI followed by the repo-relative path from the index below (e.g. `…/pilots/11-verus-2219/MECHANISM-dissection.md`).
 
