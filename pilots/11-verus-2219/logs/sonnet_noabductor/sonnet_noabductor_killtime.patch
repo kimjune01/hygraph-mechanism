@@ -1,0 +1,43 @@
+diff --git a/source/rustc_mir_build/src/builder/mod.rs b/source/rustc_mir_build/src/builder/mod.rs
+index 90dcc86ad..ad7003188 100644
+--- a/source/rustc_mir_build/src/builder/mod.rs
++++ b/source/rustc_mir_build/src/builder/mod.rs
+@@ -843,9 +843,18 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+     fn lint_and_remove_uninhabited(&mut self) {
+         let mut lints = vec![];
+ 
++        // The erased_ghost_value function is a Verus ghost placeholder used during erasure
++        // of spec/proof expressions. Ghost erasure must never affect MIR control-flow
++        // reachability, so we must not remove the return edge for calls to it even when
++        // its return type is `!`. (issue: ghost uses of never type invalidate borrowchecking)
++        let erased_ghost_value_did = self.tcx.get_diagnostic_item(
++            Symbol::intern("verus::verus_builtin::erased_ghost_value"),
++        );
++
+         for bbdata in self.cfg.basic_blocks.iter_mut() {
+             let term = bbdata.terminator_mut();
+-            let TerminatorKind::Call { ref mut target, destination, .. } = term.kind else {
++            let TerminatorKind::Call { ref mut target, destination, ref func, .. } = term.kind
++            else {
+                 continue;
+             };
+             let Some(target_bb) = *target else { continue };
+@@ -877,6 +886,18 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+                 };
+ 
+             if !ty_is_inhabited {
++                // Ghost erasure calls (erased_ghost_value) are placeholders for spec/proof
++                // expressions; they must not affect reachability, so we keep the return edge.
++                if let Some(egv_did) = erased_ghost_value_did {
++                    if let Operand::Constant(box ConstOperand { const_, .. }) = func {
++                        if let ty::TyKind::FnDef(def_id, _) = const_.ty().kind() {
++                            if *def_id == egv_did {
++                                continue;
++                            }
++                        }
++                    }
++                }
++
+                 // Unreachable code warnings are already emitted during type checking.
+                 // However, during type checking, full type information is being
+                 // calculated but not yet available, so the check for diverging

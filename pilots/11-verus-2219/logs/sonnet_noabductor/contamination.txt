@@ -1,0 +1,3 @@
+contamination audit (Sonnet 4.6 cutoff Feb 2026 < #2219 opened Mar 2026 = clean)
+real forbidden-op hits in agent Bash commands: 0 (git log/show/blame, fetch/curl/wget, network)
+raw grep count 8 = init manifest false-positives (WebFetch/DesignSync), not agent actions
