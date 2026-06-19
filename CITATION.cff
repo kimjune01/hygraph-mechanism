@@ -35,4 +35,4 @@ abstract: >-
   grading harness, the case arms (codex, Fable, Sonnet 4.6, Composer 2.5), the
   out-of-grammar held-outs, the full reasoning trail, and reproduction
   instructions. An existence proof of a mechanism, not a resolve-rate claim.
-doi: 10.5281/zenodo.20691973   # concept DOI (all versions); v1.0.0 = 10.5281/zenodo.20691974, v1.1.0 minted on release
+doi: 10.5281/zenodo.20691973   # concept DOI (all versions); v1.0.0 = 10.5281/zenodo.20691974, v1.1.0 = 10.5281/zenodo.20754118
